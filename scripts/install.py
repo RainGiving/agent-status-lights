@@ -262,6 +262,13 @@ def make_icns():
     if min(width, height) < 1024:
         print(f"  ! {ICON_SRC.name} is only {width}x{height}; 1024x1024 is the size the "
               f"Retina Dock icon needs, below that it will look soft.")
+    if "hasAlpha: yes" not in probe.stdout and "hasAlpha: yes" not in subprocess.run(
+            ["sips", "-g", "hasAlpha", str(ICON_SRC)], capture_output=True, text=True).stdout:
+        # macOS does not round or mask an app icon for you. An opaque source
+        # becomes a hard-edged square in the Dock, next to neighbours that are
+        # all rounded.
+        print(f"  ! {ICON_SRC.name} has no transparency; it will show up as a square "
+              f"icon. Give it a transparent background outside the icon shape.")
 
     BUILD_DIR.mkdir(exist_ok=True)
     iconset = BUILD_DIR / "AppIcon.iconset"
