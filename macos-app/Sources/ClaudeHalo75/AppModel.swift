@@ -11,6 +11,10 @@ final class AppModel: ObservableObject {
     @Published var message: String?
     @Published var messageIsError = false
     @Published var hooksInstalled: Int = 0
+    /// nil until the first scan finishes, or when via_scan is not installed;
+    /// an empty array means the scan ran and found no QMK keyboard on USB.
+    @Published var scanned: [ScannedDevice]?
+    @Published var scanning = false
 
     private var pollTimer: Timer?
 
@@ -23,6 +27,7 @@ final class AppModel: ObservableObject {
     init() {
         reload()
         refreshStatus()
+        rescan()
         pollTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshStatus() }
         }
@@ -69,6 +74,20 @@ final class AppModel: ObservableObject {
     }
 
     // MARK: - daemon
+
+    /// Off the main actor: the probe opens each VIA interface and waits for a
+    /// reply, which is fast but not instant, and the window should not freeze
+    /// while it happens.
+    func rescan() {
+        scanning = true
+        Task.detached(priority: .userInitiated) {
+            let report = DeviceScanner.scan()
+            await MainActor.run {
+                self.scanned = report?.devices
+                self.scanning = false
+            }
+        }
+    }
 
     func refreshStatus() {
         status = try? DaemonClient.status()

@@ -167,6 +167,40 @@ struct DeviceView: View {
 
                 GroupBox {
                     VStack(alignment: .leading, spacing: 10) {
+                        if model.scanning {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small)
+                                Text("正在扫描 USB…").font(.callout).foregroundStyle(.secondary)
+                            }
+                        } else if let devices = model.scanned, !devices.isEmpty {
+                            ForEach(devices) { device in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack(spacing: 8) {
+                                        Text(device.displayName).font(.body.bold())
+                                        Text("\(device.vendorId):\(device.productId)")
+                                            .font(.caption.monospaced()).foregroundStyle(.secondary)
+                                    }
+                                    if !device.reachable {
+                                        Text(device.error ?? "无法打开 VIA 接口")
+                                            .font(.caption).foregroundStyle(.orange)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    } else {
+                                        Text("VIA 协议 \(device.viaProtocol.map(String.init) ?? "?")"
+                                             + " · 内圈 RGB Matrix \(device.hasMatrix ? "可用" : "无")"
+                                             + " · 外圈 Halo 环 \(device.hasRing ? "可用" : "需刷固件补丁")")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
+                            }
+                        } else if model.scanned != nil {
+                            Text("USB 上没有找到会说 VIA 的 QMK 键盘。"
+                                 + "2.4G 接收器和蓝牙都不暴露 VIA 接口，只有 USB 数据线可以"
+                                 + "（有些线只能充电）。")
+                                .font(.callout).foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Divider()
                         StatusDot(ok: model.daemonRunning,
                                   label: model.daemonRunning ? "后台服务运行中" : "后台服务未运行")
                         StatusDot(ok: model.haloSupported,
@@ -178,7 +212,7 @@ struct DeviceView: View {
                                   warn: model.hooksInstalled > 0)
                     }
                     .padding(6)
-                } label: { Label("NuPhy Halo75 V2", systemImage: "keyboard") }
+                } label: { Label("键盘", systemImage: "keyboard") }
 
                 GroupBox {
                     VStack(alignment: .leading, spacing: 8) {
@@ -216,6 +250,8 @@ struct DeviceView: View {
                     HStack(spacing: 10) {
                         Button("清空会话并交还灯光") { model.resetLights() }
                             .disabled(!model.daemonRunning)
+                        Button("重新扫描键盘") { model.rescan() }
+                            .disabled(model.scanning)
                         Button("刷新状态") { model.refreshStatus() }
                         Spacer()
                     }

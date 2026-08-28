@@ -278,3 +278,70 @@ public enum ColorHex {
         String(format: "#%02X%02X%02X", r, g, b)
     }
 }
+
+// MARK: - device discovery
+
+/// One lighting subsystem a keyboard answered on, as reported by `via_scan`.
+public struct ScannedChannel: Codable, Sendable {
+    public let channel: String
+    public let description: String
+}
+
+/// A QMK keyboard found on USB. Everything here comes from a read-only probe:
+/// the identity from the USB descriptors, the lighting from asking VIA which
+/// channels it implements.
+public struct ScannedDevice: Codable, Identifiable, Sendable {
+    public let vendorId: String
+    public let productId: String
+    public let manufacturer: String?
+    public let product: String?
+    public let reachable: Bool
+    public let viaProtocol: Int?
+    public let error: String?
+    public let lighting: [String: ScannedChannel]?
+
+    enum CodingKeys: String, CodingKey {
+        case manufacturer, product, reachable, error, lighting
+        case vendorId = "vendor_id"
+        case productId = "product_id"
+        case viaProtocol = "via_protocol"
+    }
+
+    public var id: String { "\(vendorId):\(productId)" }
+
+    /// Vendor plus product, without repeating a vendor the product already names.
+    public var displayName: String {
+        let vendor = manufacturer ?? ""
+        let name = product ?? "(no product string)"
+        if vendor.isEmpty || name.lowercased().hasPrefix(vendor.lowercased()) { return name }
+        return "\(vendor) \(name)"
+    }
+
+    public var hasMatrix: Bool { lighting?["rgb_matrix"] != nil }
+    public var hasRing: Bool { lighting?["halo_ring"] != nil }
+}
+
+public struct ScanReport: Codable, Sendable {
+    public let devices: [ScannedDevice]
+}
+
+public enum DeviceScanner {
+    /// Runs the bundled `via_scan`. Returns nil when it is not installed yet;
+    /// an empty device list is a real answer -- nothing is plugged in -- and is
+    /// deliberately distinct from that.
+    public static func scan() -> ScanReport? {
+        let binary = SettingsStore.directory.appendingPathComponent("via_scan")
+        guard FileManager.default.isExecutableFile(atPath: binary.path) else { return nil }
+        let task = Process()
+        task.executableURL = binary
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        // Read before waiting: the pipe buffer is small enough that a chatty
+        // deep scan would deadlock the other way round.
+        do { try task.run() } catch { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        return try? JSONDecoder().decode(ScanReport.self, from: data)
+    }
+}

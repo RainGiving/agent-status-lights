@@ -34,6 +34,49 @@
 **状态由运动区分，颜色只是强化。** 这不是为了好看：余光扫过时，"整环一起明灭"和
 "一个点在转圈"的区别一眼就能分辨，而两种红色的区别不能。所以外圈打开之后，它才是主信号。
 
+## 先扫一眼：接了什么键盘、它有什么灯
+
+装之前（或任何时候）都可以先问一句，这一步**只读，不写键盘任何一个字节**：
+
+```bash
+/usr/bin/python3 scripts/install.py scan
+```
+
+```text
+scanning USB for QMK keyboards that speak VIA...
+  found: NuPhy Halo75 V2  [0x19f5:0x32f5]  -- tested: NuPhy Halo75 V2
+    VIA protocol 12, up 2204s
+    0x03 rgb_matrix QMK RGB Matrix (per-key)
+               now: brightness=153, effect=4, speed=110, hue=142, sat=255
+    0x10 halo_ring  Halo ring (this project's firmware patch)
+               now: mode=comet, r=0, g=168, b=255, speed=102, param=18, brightness=255
+    -> 内圈 (RGB Matrix): 可用    外圈 (Halo ring): 可用
+```
+
+`install` 和 `reconnect` 都会先跑一次它，设置 App 的「设备」页也会在打开时自动扫一次
+（有「重新扫描键盘」按钮）。它按顺序回答三个问题：
+
+1. **USB 上有没有 QMK 键盘。** 靠 HID usage page `0xFF60` / usage `0x61`（VIA 自己的
+   raw 接口）匹配，**不是**靠写死的 VID/PID —— 所以没人适配过的板子它也找得到。
+   什么都没找到时它会直接告诉你 2.4G 和蓝牙不暴露 VIA 接口，只有 USB 数据线可以。
+2. **它是什么。** VID/PID、USB 字符串描述符、以及它自报的 VIA 协议版本。
+3. **它有哪些灯。** 逐个问 VIA 的灯光通道，固件没实现的会回 `0xff`，所以"答不答得上来"
+   就是判据，而回复本身正好就是那个通道的当前值。
+
+```bash
+/usr/bin/python3 scripts/install.py scan --deep   # 扫全部 256 个通道，本机约 0.8 秒
+/usr/bin/python3 scripts/install.py scan --json   # 原始 JSON，给脚本用
+```
+
+> **只扫通道号，绝不扫命令号。** 通道号是 `0x08` 的参数，扫它是安全的；VIA 的**命令**号
+> 不是 —— `0x0A` 是 `id_eeprom_reset`，`0x0B` 是 `id_bootloader_jump`，扫下去会清掉你的
+> 改键并把键盘丢进 bootloader。扫描器全程只发 `0x01` / `0x02` / `0x08` 三个读命令。
+
+**在别的 QMK 键盘上会怎样？** 扫描是通用的，能告诉你那块板子有没有 RGB Matrix、
+RGBLIGHT、backlight。内圈那条路走的是标准 QMK RGB Matrix 通道 `0x03`，原理上任何实现了
+它的 VIA 键盘都能用 —— 但**只有 Halo75 V2 是真机验证过的**，其余是没试过。外圈是
+Halo75 V2 专属的，它依赖本项目自己的固件补丁。
+
 ## 主动重连：打开外圈和远程会话
 
 上面两件默认关掉的事，用一条命令一起打开：
@@ -346,6 +389,8 @@ LEDCTL=~/Library/Application\ Support/ClaudeHalo75/halo75_ledctl
 /usr/bin/python3 scripts/install.py icon                   # 只从 assets/icon.png 生成 .icns
 /usr/bin/python3 scripts/install.py install                # 安装或升级
 /usr/bin/python3 scripts/install.py install-app            # 构建并安装设置 App
+/usr/bin/python3 scripts/install.py scan                   # 只读：接了什么键盘、它有哪些灯
+/usr/bin/python3 scripts/install.py scan --deep            # 同上，扫全部 256 个通道
 /usr/bin/python3 scripts/install.py status                 # 服务 / hooks / 外圈 / codex / orca / 键盘
 /usr/bin/python3 scripts/install.py reconnect              # 开启外圈 + Orca 桥接
 /usr/bin/python3 scripts/install.py reconnect --off        # 退回默认（只有内圈、只有本机）
@@ -379,8 +424,8 @@ hook 客户端把 hook 的原始 JSON 转发给本机 Unix socket，守护进程
 
 ## 故障排查
 
-**灯没反应** — 确认是 USB 数据线而不是 2.4G/蓝牙；退出 VIA / NuPhy 官方软件（它们会独占 raw HID）；
-跑 `status` 看 `keyboard` 那一行。
+**灯没反应** — 先跑 `scan`，它会直接说清是没找到键盘、还是接口被别的软件占着、还是灯光通道不对。
+最常见的两个原因：接的是 2.4G/蓝牙（不暴露 VIA 接口），或者 VIA / NuPhy 官方软件开着（独占 raw HID）。
 
 **只有键区亮，四边不亮** — 这是默认行为。跑 `reconnect`，它会告诉你是固件的问题还是连接的问题。
 
@@ -396,7 +441,8 @@ hook 客户端把 hook 的原始 JSON 转发给本机 Unix socket，守护进程
 
 ## 已知限制
 
-- 只支持 macOS 和 Halo75 V2（`19f5:32f5`）。
+- 只支持 macOS。扫描对任何 QMK/VIA 键盘都有效，内圈原理上也通用，但**只在 Halo75 V2
+  （`19f5:32f5`）上真机验证过**。
 - 外圈需要自编译固件；官方固件更新会覆盖掉，得重刷。
 - 45 颗环形灯作为一个整体显示状态。固件里那 5 个 `Fn+M+?` 分区没有单独暴露出来。
 - 远程会话只能拿到「执行中 / 等待权限 / 完成」三档，**工具失败测不出来**；而且只覆盖在

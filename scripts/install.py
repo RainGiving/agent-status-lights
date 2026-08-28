@@ -72,7 +72,10 @@ def build():
          "-framework", "CoreFoundation", "-framework", "IOKit"])
     run(["clang", "-Wall", "-Wextra", "-Werror", "-O2",
          "-o", BUILD_DIR / "halo75_hook", SRC / "halo75_hook.c"])
-    print("built:", BUILD_DIR / "halo75_ledctl", "and", BUILD_DIR / "halo75_hook")
+    run(["clang", "-Wall", "-Wextra", "-Werror", "-O2",
+         "-o", BUILD_DIR / "via_scan", SRC / "via_scan.c",
+         "-framework", "CoreFoundation", "-framework", "IOKit"])
+    print("built:", ", ".join(("halo75_ledctl", "halo75_hook", "via_scan")))
 
 
 def hook_command():
@@ -207,7 +210,11 @@ def bootstrap():
 def install():
     build()
     APP_DIR.mkdir(parents=True, exist_ok=True)
-    for name in ("halo75_ledctl", "halo75_hook"):
+    # Before touching any config: say what is actually plugged in. A scan that
+    # finds nothing is the single most likely reason an install "does not work",
+    # and it is much cheaper to say so here than to debug it afterwards.
+    describe_scan(run_scan())
+    for name in ("halo75_ledctl", "halo75_hook", "via_scan"):
         shutil.copy2(BUILD_DIR / name, APP_DIR / name)
         os.chmod(APP_DIR / name, 0o755)
     for module in ("claude_halo75_daemon.py", "orca_bridge.py"):
@@ -361,6 +368,94 @@ def hooks_uninstall():
     return 0
 
 
+# The vendor/product ids this project has actually been tested against. A board
+# not on this list is not rejected -- the scan reports what it found and says
+# what is missing, because "your keyboard has RGB Matrix but no ring" is a
+# useful answer, not an error.
+KNOWN_BOARDS = {
+    ("0x19f5", "0x32f5"): "NuPhy Halo75 V2",
+}
+
+
+def run_scan(deep=False):
+    """Ask via_scan what is plugged in. Returns the parsed JSON, or None."""
+    scanner = APP_DIR / "via_scan"
+    if not scanner.exists():
+        scanner = BUILD_DIR / "via_scan"
+    if not scanner.exists():
+        return None
+    args = [str(scanner)] + (["--deep"] if deep else [])
+    probe = subprocess.run(args, capture_output=True, text=True, timeout=90)
+    try:
+        return json.loads(probe.stdout)
+    except json.JSONDecodeError:
+        return None
+
+
+def describe_scan(report):
+    """Print a scan in the terms someone deciding whether to install cares about.
+
+    The order matters: is anything there, what is it, what can it light up, and
+    only then what this project would drive. Someone whose keyboard is on 2.4G
+    needs the first answer, not the fourth.
+    """
+    if report is None:
+        print("  ! scanner not built; run 'build' first")
+        return None
+    devices = report.get("devices") or []
+    if not devices:
+        print("  no QMK/VIA keyboard found on USB.")
+        print("  A 2.4G dongle or Bluetooth does not expose the VIA interface -- this")
+        print("  only ever works over a USB data cable (and some cables are charge-only).")
+        return None
+
+    for device in devices:
+        vid, pid = device.get("vendor_id"), device.get("product_id")
+        name = device.get("product") or "(no product string)"
+        vendor = device.get("manufacturer") or "?"
+        known = KNOWN_BOARDS.get((vid, pid))
+        # Plenty of boards repeat the vendor inside the product string.
+        label = name if name.lower().startswith(vendor.lower()) else f"{vendor} {name}"
+        print(f"  found: {label}  [{vid}:{pid}]"
+              + (f"  -- tested: {known}" if known else "  -- not tested here, see below"))
+
+        if not device.get("reachable"):
+            print(f"    ! {device.get('error', 'not reachable')}")
+            continue
+        print(f"    VIA protocol {device.get('via_protocol')}", end="")
+        if device.get("uptime_ms") is not None:
+            print(f", up {device['uptime_ms'] // 1000}s", end="")
+        print()
+
+        lighting = device.get("lighting") or {}
+        if not lighting:
+            print("    lighting: none reachable over VIA. This project has nothing to drive.")
+            continue
+        for key, channel in lighting.items():
+            values = channel.get("values") or {}
+            detail = ", ".join(f"{k}={v}" for k, v in values.items())
+            print(f"    {channel.get('channel')} {key:<10} {channel.get('description')}")
+            if detail:
+                print(f"               now: {detail}")
+        extra = device.get("extra_channels") or []
+        if extra:
+            print(f"    also answering on undocumented channels: {', '.join(extra)}")
+        elif not device.get("deep_scan"):
+            print("    (only the standard channels were probed; 'scan --deep' sweeps all 256)")
+
+        # What that means for this project, stated plainly.
+        has_matrix = "rgb_matrix" in lighting
+        has_ring = "halo_ring" in lighting
+        print(f"    -> 内圈 (RGB Matrix): {'可用' if has_matrix else '不可用'}"
+              f"    外圈 (Halo ring): {'可用' if has_ring else '需要刷本项目的固件补丁'}")
+    return devices
+
+
+def scan(deep=False):
+    print("scanning USB for QMK keyboards that speak VIA...")
+    return 0 if describe_scan(run_scan(deep=deep)) else 1
+
+
 def read_json(path, default):
     try:
         with open(path, encoding="utf-8") as handle:
@@ -429,6 +524,7 @@ def reconnect(off=False):
         nudge_daemon()
         return 0
 
+    describe_scan(run_scan())
     present = ring_firmware_present()
     if present is None:
         print("  ! halo75_ledctl not built; run 'install' first")
@@ -690,6 +786,10 @@ def main():
                  "build-app", "install-app", "hooks-install", "hooks-uninstall",
                  "icon", "codex-hooks-install", "codex-hooks-uninstall"):
         sub.add_parser(name)
+    sc = sub.add_parser("scan")
+    sc.add_argument("--deep", action="store_true",
+                    help="sweep all 256 custom channels, not just the standard ones")
+    sc.add_argument("--json", action="store_true", help="raw JSON instead of a summary")
     rc = sub.add_parser("reconnect")
     rc.add_argument("--off", action="store_true",
                     help="back out: hand the ring back and stop polling Orca")
@@ -718,6 +818,12 @@ def main():
         return hooks_install()
     if args.command == "hooks-uninstall":
         return hooks_uninstall()
+    if args.command == "scan":
+        if args.json:
+            report = run_scan(deep=args.deep)
+            print(json.dumps(report, indent=2, ensure_ascii=False))
+            return 0 if (report or {}).get("devices") else 1
+        return scan(deep=args.deep)
     if args.command == "reconnect":
         return reconnect(off=args.off)
     if args.command == "icon":

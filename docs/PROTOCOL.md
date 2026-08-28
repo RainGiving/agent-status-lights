@@ -126,6 +126,53 @@ VIA; 254 is the ceiling and is visually identical.
 
 Hue, saturation, effect and speed all round-trip exactly and need no correction.
 
+## Replies must be matched to requests
+
+The VIA interface is opened without `kIOHIDOptionsTypeSeizeDevice` — it has to
+be, or the daemon and the CLI tools could not both use it. macOS then delivers
+**every** input report to **every** process that has the device open. A reader
+that simply takes the next report to arrive will therefore parse another
+process's answer as its own whenever two are active at the same time.
+
+Measured: 12 concurrent `halo75_ledctl get` calls returned **11 different
+answers and not one correct one**, with the fields visibly shuffled between
+value ids (the effect slot holding a brightness, and so on). It is not a rare
+race — with any concurrency at all it is the common case.
+
+The consequence reaches past a wrong line of output. `matrix_read()` is what
+records the user's own lighting before takeover; a shuffled read is persisted
+to `state.json` and written back to the keyboard on uninstall.
+
+VIA echoes the head of the request in its reply, which is enough to tell one
+answer from another. How much it echoes depends on the command:
+
+| Command | Echoed prefix | Reply |
+| --- | --- | --- |
+| `0x01` `id_get_protocol_version` | command only | `[0x01, hi, lo]` |
+| `0x02` `id_get_keyboard_value` | command + value id | `[0x02, value_id, data…]` |
+| `0x07`/`0x08` custom set/get | command + channel + value id | `[cmd, channel, value_id, data…]` |
+
+An unhandled request comes back with byte 0 replaced by `0xff`, the remaining
+echoed bytes intact — so the match must compare byte 0 against *either* the
+command or `0xff`, and the rest exactly. Both `halo75_ledctl` and `via_scan`
+loop, discarding reports that do not match, until theirs arrives or the
+deadline passes. Verified with 18 concurrent readers across both binaries:
+all 18 agreed, and agreed with a single reader.
+
+## Discovering an unknown board
+
+`scripts/install.py scan` (binary: `src/via_scan.c`) does the read-only version
+of everything above against **any** keyboard, not just this one. It matches on
+HID usage page `0xFF60` / usage `0x61` rather than on a vendor/product id, so it
+finds boards nobody has mapped, then reports the VIA protocol version and sweeps
+the lighting channels to see which the firmware implements. `scan --deep` sweeps
+all 256 channel ids; on this keyboard that takes 0.8 s and confirms the finding
+above — `0x03`, plus `0x10` once the patch is flashed, and nothing else.
+
+Channel ids are safe to sweep because they are arguments to `0x08`. VIA
+**command** ids are not, and nothing here sweeps them: `0x0A` is
+`id_eeprom_reset` and `0x0B` is `id_bootloader_jump`.
+
 ## Tools
 
 `scripts/via_probe.c` and `scripts/via_dump.c` are the read-only probes used to

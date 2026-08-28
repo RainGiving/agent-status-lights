@@ -48,8 +48,25 @@ static void input_cb(void *ctx, IOReturn res, void *s, IOHIDReportType t,
     CFRunLoopStop(CFRunLoopGetCurrent());
 }
 
-// Sends one 32-byte VIA report and waits for the reply. Returns false on
+// Sends one 32-byte VIA report and waits for *its* reply. Returns false on
 // timeout, transport error, or a 0xff "unsupported command" echo.
+//
+// The reply has to be matched against the request rather than simply taken as
+// the next input report to arrive. The VIA interface is opened without
+// kIOHIDOptionsTypeSeizeDevice -- it has to be, or the daemon and this CLI
+// could not both use it -- and macOS then delivers *every* input report to
+// *every* process that has the device open. Two readers running at once
+// therefore each get both answers, and whoever takes the first one it sees
+// parses the other's reply as its own. Measured: 12 concurrent `get` calls
+// produced 11 different answers and not one correct one, with the fields
+// visibly shuffled between value ids.
+//
+// That matters well beyond a wrong line of output: matrix_read() is what
+// records the user's own lighting before takeover, and a shuffled read gets
+// persisted to state.json and written back to the keyboard on uninstall.
+//
+// VIA echoes the command, channel and value ids in the first three bytes of
+// its reply, which is exactly enough to tell our answer from someone else's.
 static bool via_exchange(IOHIDDeviceRef dev, In *in, const uint8_t *req) {
     uint8_t out[REPORT_SIZE];
     memset(out, 0, REPORT_SIZE);
@@ -59,16 +76,31 @@ static bool via_exchange(IOHIDDeviceRef dev, In *in, const uint8_t *req) {
         fprintf(stderr, "via write failed\n");
         return false;
     }
-    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 1.5, false);
-    if (!in->received || in->result != kIOReturnSuccess) {
-        fprintf(stderr, "via read timed out\n");
-        return false;
+
+    // Every request this tool sends is an id_custom_get/set_value, whose reply
+    // echoes all three header bytes.
+    CFAbsoluteTime deadline = CFAbsoluteTimeGetCurrent() + 1.5;
+    for (;;) {
+        CFTimeInterval remaining = deadline - CFAbsoluteTimeGetCurrent();
+        if (remaining <= 0) {
+            fprintf(stderr, "via read timed out\n");
+            return false;
+        }
+        in->received = false;
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, remaining, false);
+        if (!in->received || in->result != kIOReturnSuccess) {
+            fprintf(stderr, "via read timed out\n");
+            return false;
+        }
+        if (in->len >= 3 && in->buf[1] == req[1] && in->buf[2] == req[2]) {
+            if (in->buf[0] == 0xff) {
+                fprintf(stderr, "via command unsupported by firmware\n");
+                return false;
+            }
+            if (in->buf[0] == req[0]) return true;
+        }
+        // Someone else's reply. Drop it and keep waiting for ours.
     }
-    if (in->buf[0] == 0xff) {
-        fprintf(stderr, "via command unsupported by firmware\n");
-        return false;
-    }
-    return true;
 }
 
 static bool rgb_get(IOHIDDeviceRef dev, In *in, uint8_t value_id, uint8_t out[2]) {
