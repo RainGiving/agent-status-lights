@@ -54,7 +54,8 @@ swift --version          # 构建设置 App 用，跟着 CLT 一起装
 /usr/bin/python3 -V      # macOS 自带，3.9+ 即可；不要换成 brew 的 python
 ```
 
-然后编译 C 部分（三个二进制：`halo75_ledctl`、`halo75_hook`、`via_scan`）：
+然后编译 C 部分（五个二进制：`halo75_ledctl`、`halo75_hook`、`via_scan`，
+以及刷固件时才用得上的 `via_backup` / `via_restore`）：
 
 ```bash
 /usr/bin/python3 scripts/install.py build
@@ -109,7 +110,13 @@ swift --version          # 构建设置 App 用，跟着 CLT 一起装
 
 ### 4.1 工具链
 
-先看 `~/qmk_nuphy` 在不在。在就跳到 4.2。
+先检查 `dfu-util`，没有它后面刷不了：
+
+```bash
+which dfu-util || brew install dfu-util
+```
+
+再看 `~/qmk_nuphy` 在不在。在就跳到 4.2。
 
 不在的话，这四个坑每一个都会让构建失败，照做别绕：
 
@@ -128,21 +135,22 @@ git submodule update --init --depth 1 lib/chibios lib/chibios-contrib lib/printf
 3. 子模块只要上面那五个，`--init` 全量会拉很久。
 4. 见 4.3。
 
-### 4.2 备份（不许跳过）
+### 4.2 备份改键（不许跳过）
+
+DFU 会清空 EEPROM，用户的改键就在里面。**先备份，确认文件非空，再往下走。**
 
 ```bash
 cd ~/Desktop/projects/agent-status-lights
 mkdir -p backups
-./build/via_backup > backups/keymap-$(date +%Y%m%d-%H%M%S).txt
+STAMP=$(date +%Y%m%d-%H%M%S)
+./build/via_backup > backups/keymap-$STAMP.txt
+grep -c '^0' backups/keymap-$STAMP.txt      # 应该是几十行，0 行就是失败
 ```
 
-确认文件非空再往下。同时 dump 一份原厂固件当回滚镜像（要求键盘已经在 DFU 里，
-所以这一步实际发生在 4.4 之后 —— 如果用户还没有回滚镜像，在 4.4 用户确认进入 DFU 后
-先跑这条，再刷）：
+把 `$STAMP` 记住，4.5 要用。备份失败（键盘没答话、行数为 0）就**停下来**，不要刷。
 
-```bash
-dfu-util -a 0 -d 0483:df11 -s 0x08000000:131072 -U backups/stock-firmware-backup.bin
-```
+回滚镜像（原厂固件的全片 dump）要在键盘**已经进入 DFU 之后**才能取，所以它在
+4.4 之后、4.5 之前，见下面。
 
 ### 4.3 构建
 
@@ -170,7 +178,18 @@ PATH="$HOME/qmk_nuphy/toolchain/bin:$PATH" ~/qmk_nuphy/.venv/bin/qmk compile -kb
 dfu-util -l | grep -i 0483:df11
 ```
 
-### 4.5 刷入并恢复
+### 4.5 先留回滚镜像，再刷
+
+键盘现在在 DFU 里，这是唯一能 dump 原厂固件的时机。`backups/stock-firmware-backup.bin`
+已经存在就跳过：
+
+```bash
+cd ~/Desktop/projects/agent-status-lights
+[ -f backups/stock-firmware-backup.bin ] || \
+  dfu-util -a 0 -d 0483:df11 -s 0x08000000:131072 -U backups/stock-firmware-backup.bin
+```
+
+然后刷：
 
 ```bash
 dfu-util -a 0 -d 0483:df11 -s 0x08000000:leave -D ~/qmk_nuphy/nuphy_halo75_v2_ansi_via.bin
@@ -180,7 +199,7 @@ dfu-util -a 0 -d 0483:df11 -s 0x08000000:leave -D ~/qmk_nuphy/nuphy_halo75_v2_an
 
 ```bash
 cd ~/Desktop/projects/agent-status-lights
-./build/via_restore backups/keymap-<刚才那个时间戳>.txt
+./build/via_restore backups/keymap-$STAMP.txt      # 4.2 记下的那个
 ```
 
 然后**重新扫描确认**：

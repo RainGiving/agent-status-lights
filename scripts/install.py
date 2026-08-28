@@ -16,6 +16,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src"
+SCRIPTS = REPO / "scripts"
 APP_DIR = Path.home() / "Library" / "Application Support" / "ClaudeHalo75"
 BUILD_DIR = REPO / "build"
 APP_SRC = REPO / "macos-app"
@@ -75,7 +76,15 @@ def build():
     run(["clang", "-Wall", "-Wextra", "-Werror", "-O2",
          "-o", BUILD_DIR / "via_scan", SRC / "via_scan.c",
          "-framework", "CoreFoundation", "-framework", "IOKit"])
-    print("built:", ", ".join(("halo75_ledctl", "halo75_hook", "via_scan")))
+    # Only the firmware path uses these, but build/ is not checked in, so a
+    # fresh clone that skipped them would reach "back up the keymap before
+    # DFU" with no way to do it -- the one step that must not be skipped.
+    for tool in ("via_backup", "via_restore"):
+        run(["clang", "-Wall", "-Wextra", "-Werror", "-O2",
+             "-o", BUILD_DIR / tool, SCRIPTS / f"{tool}.c",
+             "-framework", "CoreFoundation", "-framework", "IOKit"])
+    print("built:", ", ".join(("halo75_ledctl", "halo75_hook", "via_scan",
+                               "via_backup", "via_restore")))
 
 
 def hook_command():
