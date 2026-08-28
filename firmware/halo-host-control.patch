@@ -1,0 +1,241 @@
+diff --git a/keyboards/nuphy/halo75_v2/ansi/ansi.c b/keyboards/nuphy/halo75_v2/ansi/ansi.c
+index 8e01b95..ad6a1f8 100644
+--- a/keyboards/nuphy/halo75_v2/ansi/ansi.c
++++ b/keyboards/nuphy/halo75_v2/ansi/ansi.c
+@@ -791,3 +791,81 @@ void housekeeping_task_kb(void)
+     Sleep_Handle();
+ 
+ }
++
++#ifdef VIA_ENABLE
++#    include "via.h"
++
++/* Vendor channel for the Halo ring.
++ *
++ * QMK's own custom channels stop at 0x05 and this keyboard defines none of its
++ * own, so 0x10 cannot collide. A sweep of id_custom_get_value across all 256
++ * channels on stock firmware answered on 0x03 alone, which is what makes this
++ * safe to claim.
++ *
++ * One value id carries the whole animation so a change lands atomically -- a
++ * mode and its colour arriving in separate reports would show a frame of the
++ * new animation in the old colour. */
++enum {
++    id_halo_channel = 0x10,
++};
++
++enum {
++    id_halo_animation = 0x01,
++};
++
++#    define HALO_PAYLOAD_LEN 7
++
++void via_custom_value_command_kb(uint8_t *data, uint8_t length) {
++    // data = [ command_id, channel_id, value_id, value_data ]
++    uint8_t *command_id = &(data[0]);
++    uint8_t *channel_id = &(data[1]);
++    uint8_t *value_id   = &(data[2]);
++    uint8_t *value_data = &(data[3]);
++
++    if (*channel_id != id_halo_channel || *value_id != id_halo_animation) {
++        *command_id = id_unhandled;
++        return;
++    }
++
++    switch (*command_id) {
++        case id_custom_set_value: {
++            if (length < 3 + HALO_PAYLOAD_LEN || value_data[0] >= HALO_HOST_MODE_COUNT) {
++                *command_id = id_unhandled;
++                return;
++            }
++            halo_host_t cfg = {
++                .mode   = value_data[0],
++                .r      = value_data[1],
++                .g      = value_data[2],
++                .b      = value_data[3],
++                .speed  = value_data[4],
++                .param  = value_data[5],
++                .bright = value_data[6],
++            };
++            halo_host_set(&cfg);
++            break;
++        }
++
++        case id_custom_get_value: {
++            value_data[0] = halo_host.mode;
++            value_data[1] = halo_host.r;
++            value_data[2] = halo_host.g;
++            value_data[3] = halo_host.b;
++            value_data[4] = halo_host.speed;
++            value_data[5] = halo_host.param;
++            value_data[6] = halo_host.bright;
++            break;
++        }
++
++        case id_custom_save:
++            /* The ring is a transient status display. Persisting it to EEPROM
++             * would mean booting into whatever the last task's colour was, and
++             * would wear the cell for no benefit, so save is a no-op. */
++            break;
++
++        default:
++            *command_id = id_unhandled;
++            break;
++    }
++}
++#endif
+diff --git a/keyboards/nuphy/halo75_v2/ansi/ansi.h b/keyboards/nuphy/halo75_v2/ansi/ansi.h
+index 9a2c393..af6142d 100644
+--- a/keyboards/nuphy/halo75_v2/ansi/ansi.h
++++ b/keyboards/nuphy/halo75_v2/ansi/ansi.h
+@@ -203,4 +203,34 @@ typedef struct
+ } user_config_t;
+ 
+ extern user_config_t user_config;
++
++/* Host-driven Halo ring.
++ *
++ * The status-light daemon on the host owns the ring while it has something to
++ * report. The firmware only implements animation primitives -- colour, speed,
++ * tail length and brightness all arrive over VIA at runtime, so the look can be
++ * retuned without reflashing.
++ *
++ * HALO_HOST_RELEASE hands the ring straight back to the firmware's own effects,
++ * so whatever the user set with Fn+M survives untouched. */
++enum halo_host_mode {
++    HALO_HOST_RELEASE = 0,
++    HALO_HOST_SOLID,
++    HALO_HOST_PULSE,
++    HALO_HOST_COMET,
++    HALO_HOST_STROBE,
++    HALO_HOST_FILL,
++    HALO_HOST_MODE_COUNT,
++};
++
++typedef struct {
++    uint8_t mode;
++    uint8_t r, g, b;
++    uint8_t speed;   /* 1-255, larger is faster */
++    uint8_t param;   /* comet tail length, or strobe duty cycle in percent */
++    uint8_t bright;  /* 0-255 */
++} halo_host_t;
++
++extern halo_host_t halo_host;
++void halo_host_set(const halo_host_t *cfg);
+ #define f_dev_sleep_enable  user_config.ee_dev_config.bit0
+\ No newline at end of file
+diff --git a/keyboards/nuphy/halo75_v2/ansi/side.c b/keyboards/nuphy/halo75_v2/ansi/side.c
+index 1f545e8..731b25b 100644
+--- a/keyboards/nuphy/halo75_v2/ansi/side.c
++++ b/keyboards/nuphy/halo75_v2/ansi/side.c
+@@ -1095,6 +1095,90 @@ void rgb_test_show(void)
+ /**
+  * @brief  side_led_show.
+  */
++/* ---------------------------------------------------------------------------
++ * Host-driven Halo ring -- see halo_host_t in ansi.h.
++ * ------------------------------------------------------------------------ */
++halo_host_t halo_host = {.mode = HALO_HOST_RELEASE};
++
++static uint32_t halo_host_timer = 0;
++static uint32_t halo_host_phase = 0;
++
++void halo_host_set(const halo_host_t *cfg)
++{
++    halo_host       = *cfg;
++    halo_host_phase = 0;   /* every change restarts the animation from frame 0 */
++    halo_host_timer = timer_read32();
++}
++
++/* Paints ring position i with the host colour dimmed to level (0-255).
++ * count_rgb_light() is applied twice so the animation envelope and the overall
++ * brightness compose the same way the firmware's own effects do. */
++static void halo_host_pixel(uint8_t i, uint8_t level)
++{
++    r_temp = halo_host.r;
++    g_temp = halo_host.g;
++    b_temp = halo_host.b;
++    count_rgb_light(level);
++    count_rgb_light(halo_host.bright);
++    rgb_matrix_set_color(side_led_index_tab[i], r_temp, g_temp, b_temp);
++}
++
++static void halo_host_show(void)
++{
++    halo_host_phase += timer_elapsed32(halo_host_timer);
++    halo_host_timer = timer_read32();
++
++    const uint8_t  speed    = halo_host.speed ? halo_host.speed : 1;
++    const uint32_t step_ms  = 4 + (255 - speed) / 3;              /* per ring position */
++    const uint32_t cycle_ms = 240 + (uint32_t)(255 - speed) * 14; /* per full cycle */
++
++    switch (halo_host.mode) {
++        case HALO_HOST_SOLID:
++            for (uint8_t i = 0; i < 45; i++) halo_host_pixel(i, 255);
++            break;
++
++        case HALO_HOST_PULSE: {
++            /* Reuses the firmware's own breathe curve so it feels native. */
++            uint8_t phase = (halo_host_phase % cycle_ms) * BREATHE_TAB_LEN / cycle_ms;
++            uint8_t level = breathe_data_tab[phase];
++            for (uint8_t i = 0; i < 45; i++) halo_host_pixel(i, level);
++            break;
++        }
++
++        case HALO_HOST_COMET: {
++            uint8_t tail = halo_host.param ? halo_host.param : 12;
++            if (tail > 45) tail = 45;
++            uint8_t head = (halo_host_phase / step_ms) % 45;
++            for (uint8_t i = 0; i < 45; i++) {
++                uint8_t behind = (uint8_t)((head + 45 - i) % 45);
++                uint8_t level  = behind < tail ? (uint8_t)(255 - behind * 255 / tail) : 0;
++                halo_host_pixel(i, level);
++            }
++            break;
++        }
++
++        case HALO_HOST_STROBE: {
++            uint8_t  duty   = halo_host.param ? halo_host.param : 50;
++            uint32_t period = cycle_ms / 3;   /* an alert should read as fast */
++            if (period == 0) period = 1;
++            bool on = (halo_host_phase % period) < (period * duty / 100);
++            for (uint8_t i = 0; i < 45; i++) halo_host_pixel(i, on ? 255 : 0);
++            break;
++        }
++
++        case HALO_HOST_FILL: {
++            /* Sweeps around once, then holds the whole ring lit. */
++            uint32_t filled = halo_host_phase / step_ms;
++            if (filled > 45) filled = 45;
++            for (uint8_t i = 0; i < 45; i++) halo_host_pixel(i, i < filled ? 255 : 0);
++            break;
++        }
++
++        default:
++            break;
++    }
++}
++
+ void m_side_led_show(void)
+ {
+     static bool flag_power_on         = 1;
+@@ -1113,6 +1197,19 @@ void m_side_led_show(void)
+        return;
+     }
+ 
++    if (halo_host.mode != HALO_HOST_RELEASE) {
++        halo_host_show();
++        /* Battery, system and RF indicators keep their own LEDs -- losing a
++         * low-battery or pairing signal to a status colour would be worse than
++         * the occasional overpainted pixel. */
++        bat_led_show();
++        sys_led_show();
++        sys_sw_led_show();
++        sleep_sw_led_show();
++        rf_led_show();
++        return;
++    }
++
+     switch(side_mode_b){
+         case SIDE_MODE_1:
+              side_line = 0;
