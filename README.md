@@ -1,6 +1,15 @@
-# Claude Halo75 Status Lights
+# Agent Status Lights
 
-把 Claude Code 的任务状态映射到 **NuPhy Halo75 V2** 的背光。
+把编码 agent 的任务状态映射到 QMK 键盘的背光上 —— 执行中 / 等待你批准 / 出错 / 全部完成，
+四种状态用**运动**而不是颜色区分，余光扫过就能读。
+
+支持 **Claude Code** 和 **Codex CLI**（两者的 hook 契约是同一套），本机会话走 hook，
+Orca 里起的远程会话走轮询桥接，全部汇进同一盏灯。
+
+硬件这边靠 VIA 的 raw HID 接口发现键盘，**不认写死的 VID/PID** ——
+`install.py scan` 会告诉你插着的是什么板子、它有哪些灯光通道。内圈走标准 QMK RGB Matrix，
+原理上任何 VIA 键盘都能用；外圈（**NuPhy Halo75 V2** 底座那圈 45 颗 Halo 灯）是本项目
+自己的固件补丁做的，也只在这块板子上真机验证过。
 
 灵感来自 [codex-kick75-status-lights](https://github.com/Pixelmoss/codex-kick75-status-lights)，
 但硬件层是完全重写的：那个项目走 NuPhy Kick75 的私有 HID 协议，Halo75 V2 是标准 QMK + VIA，
