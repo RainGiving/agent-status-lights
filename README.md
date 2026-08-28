@@ -6,6 +6,8 @@
 
 ![执行中：彗星绕着底座转圈，键区跟着同一个颜色](docs/demo.gif)
 
+*上面是开头 8 秒。完整演示（52 秒，含设置 App 调参）：[`docs/demo.mp4`](docs/demo.mp4)*
+
 支持 **Claude Code** 和 **Codex CLI**，本机会话走 hook，Orca 里的远程会话走轮询。
 键盘靠 VIA 的 raw HID 接口发现，不认写死的 VID/PID。
 
