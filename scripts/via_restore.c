@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { VID=0x19f5, PID=0x32f5, UP=0xff60, US=0x61, RPT=32, MAXBUF=8192 };
+enum { VID=0x19f5, PID=0x3315, UP=0xff60, US=0x61, RPT=32, MAXBUF=8192 };
 typedef struct { bool received; IOReturn result; CFIndex len; uint8_t buf[RPT]; } In;
 
 static long prop(IOHIDDeviceRef d, CFStringRef k){

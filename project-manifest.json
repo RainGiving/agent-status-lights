@@ -1,0 +1,22 @@
+{
+  "entries": [
+    {
+      "path": "build",
+      "kind": "directory",
+      "state": "generated",
+      "purpose": "scripts/install.py 编译出的二进制和 Claude Halo65.app，未被 Git 跟踪，可随时重建"
+    },
+    {
+      "path": "backups",
+      "kind": "directory",
+      "state": "active",
+      "purpose": "未被 Git 跟踪但需要长期保留：stock-firmware-backup.bin 是刷机前导出的原厂固件整片，keymap-*.txt 是 DFU 清空 EEPROM 前的 VIA 改键，回滚只能靠它们"
+    },
+    {
+      "path": "firmware/halo-host-control.patch",
+      "kind": "file",
+      "state": "active",
+      "purpose": "针对 nuphy-src/qmk_firmware 的 nuphy-keyboards 分支、keyboards/nuphy/halo65_v2/ansi 写的外圈补丁，换板子或换分支都要重新生成"
+    }
+  ]
+}

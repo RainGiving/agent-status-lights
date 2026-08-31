@@ -34,7 +34,7 @@ Codex，agent 读到这里，然后照着往下执行。
    这三种情况的处理方式完全不同，猜错会让用户在错误的方向上排查很久。
 7. **每一步的输出要念给用户听**，尤其是扫描结果。用户需要知道自己的键盘被认成了什么。
 
-外圈固件那一整段（第 4 步）**只适用于 NuPhy Halo75 V2**，因为补丁是针对那块板子的
+外圈固件那一整段（第 4 步）**只适用于 NuPhy Halo65 V2**，因为补丁是针对那块板子的
 `side.c` 写的。别的 QMK 键盘跳过第 4 步，走内圈就行。
 
 ---
@@ -54,7 +54,7 @@ swift --version          # 构建设置 App 用，跟着 CLT 一起装
 /usr/bin/python3 -V      # macOS 自带，3.9+ 即可；不要换成 brew 的 python
 ```
 
-然后编译 C 部分（五个二进制：`halo75_ledctl`、`halo75_hook`、`via_scan`，
+然后编译 C 部分（五个二进制：`halo65_ledctl`、`halo65_hook`、`via_scan`，
 以及刷固件时才用得上的 `via_backup` / `via_restore`）：
 
 ```bash
@@ -91,22 +91,22 @@ swift --version          # 构建设置 App 用，跟着 CLT 一起装
 
 **C. 找到设备，有 `rgb_matrix`，没有 `halo_ring`**
 
-这是绝大多数情况，包括原厂固件的 Halo75 V2 和其他 QMK 键盘。
+这是绝大多数情况，包括原厂固件的 Halo65 V2 和其他 QMK 键盘。
 **内圈（键区背光）现在就能用，不需要刷任何固件。** 跳到第 5 步。
 
 只有当**同时满足**下面两条时，才提第 4 步：
 
-- 设备是 `0x19f5:0x32f5`（NuPhy Halo75 V2），**并且**
-- 用户明确说想要外圈那圈 45 颗 Halo 灯
+- 设备是 `0x19f5:0x3315`（NuPhy Halo65 V2），**并且**
+- 用户明确说想要外圈那圈 50 颗 Halo 灯
 
-提的时候要把代价说全：需要装 QMK 工具链（约 1.5 GB 源码 + ARM 官方 toolchain）、
+提的时候要把代价说全：需要装 QMK 工具链（源码和子模块约 0.5 GB，ARM toolchain 约 0.9 GB）、
 需要用户物理进 DFU、会清 EEPROM。**默认不要推销它**，问一句就够了。
 
 **D. 找到设备，`halo_ring` 已经答话**
 
 固件补丁已经在机器上了，第 4 步整个跳过。直接第 5 步，并且在那之后跑 `reconnect`。
 
-## 4. 外圈固件（可选，只对 Halo75 V2，需要用户动手）
+## 4. 外圈固件（可选，只对 Halo65 V2，需要用户动手）
 
 ### 4.1 工具链
 
@@ -127,7 +127,15 @@ git submodule update --init --depth 1 lib/chibios lib/chibios-contrib lib/printf
 ```
 
 1. **Homebrew 的 `arm-none-eabi-gcc` 不带 newlib**，编译一定挂在 `stdint.h`。
-   用 ARM 官方的 toolchain tarball，解压到 `~/qmk_nuphy/toolchain`。
+   用 ARM 官方的 toolchain tarball，解压到 `~/qmk_nuphy/toolchain`。Apple Silicon 上
+   验证过的一版是 13.3.Rel1：
+
+   ```bash
+   curl -L -o /tmp/arm-toolchain.tar.xz \
+     https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-darwin-arm64-arm-none-eabi.tar.xz
+   mkdir -p ~/qmk_nuphy/toolchain
+   tar -xf /tmp/arm-toolchain.tar.xz -C ~/qmk_nuphy/toolchain --strip-components=1
+   ```
 2. **`brew install qmk/qmk/qmk` 会被 Homebrew 的 untrusted tap 拦住。**
    改用 venv：`python3 -m venv ~/qmk_nuphy/.venv`，然后
    `~/qmk_nuphy/.venv/bin/pip install qmk -r ~/qmk_nuphy/requirements.txt`
@@ -157,10 +165,10 @@ grep -c '^0' backups/keymap-$STAMP.txt      # 应该是几十行，0 行就是�
 ```bash
 cd ~/qmk_nuphy
 git apply ~/Desktop/projects/agent-status-lights/firmware/halo-host-control.patch
-PATH="$HOME/qmk_nuphy/toolchain/bin:$PATH" ~/qmk_nuphy/.venv/bin/qmk compile -kb nuphy/halo75_v2/ansi -km via
+PATH="$HOME/qmk_nuphy/toolchain/bin:$PATH" ~/qmk_nuphy/.venv/bin/qmk compile -kb nuphy/halo65_v2/ansi -km via
 ```
 
-产物 `~/qmk_nuphy/nuphy_halo75_v2_ansi_via.bin`，约 69 KB（STM32F072 有 128 KB flash）。
+产物 `~/qmk_nuphy/nuphy_halo65_v2_ansi_via.bin`，约 68 KB（STM32F072 有 128 KB flash）。
 文件不存在或明显过大就停下来，不要去刷一个没构建成功的镜像。
 
 ### 4.4 停下来，让用户进 DFU
@@ -192,7 +200,7 @@ cd ~/Desktop/projects/agent-status-lights
 然后刷：
 
 ```bash
-dfu-util -a 0 -d 0483:df11 -s 0x08000000:leave -D ~/qmk_nuphy/nuphy_halo75_v2_ansi_via.bin
+dfu-util -a 0 -d 0483:df11 -s 0x08000000:leave -D ~/qmk_nuphy/nuphy_halo65_v2_ansi_via.bin
 ```
 
 键盘会自己重启。等几秒，把改键写回去：
@@ -217,7 +225,7 @@ cd ~/Desktop/projects/agent-status-lights
 /usr/bin/python3 scripts/install.py install
 ```
 
-它会：编译、把运行文件放进 `~/Library/Application Support/ClaudeHalo75/`、
+它会：编译、把运行文件放进 `~/Library/Application Support/ClaudeHalo65/`、
 **先用 `/bin/sh` 实跑一次 hook 自测**（这一步会挡住路径含空格导致的静默 exit 127）、
 把 7 个 hook 合并进 `~/.claude/settings.json`（带时间戳备份，只动自己的条目）、
 装好 LaunchAgent。
@@ -235,7 +243,7 @@ cd ~/Desktop/projects/agent-status-lights
 
 ```bash
 /usr/bin/python3 scripts/install.py install-app
-open "$HOME/Applications/Claude Halo75.app"
+open "$HOME/Applications/Claude Halo65.app"
 ```
 
 ### 5.2 外圈和远程会话（默认关着）
@@ -279,7 +287,7 @@ sleep 12
 出问题先看日志：
 
 ```bash
-tail -50 ~/Library/Application\ Support/ClaudeHalo75/daemon.log
+tail -50 ~/Library/Application\ Support/ClaudeHalo65/daemon.log
 ```
 
 ## 全部撤销

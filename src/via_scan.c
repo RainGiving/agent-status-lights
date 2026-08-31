@@ -143,7 +143,7 @@ static void input_cb(void *ctx, IOReturn res, void *sender, IOHIDReportType type
 // process that has the device open; with the daemon running, a scan that took
 // the next report to arrive would routinely parse the daemon's answers as its
 // own and report another channel's values under this one's name. See the same
-// note in halo75_ledctl.c.
+// note in halo65_ledctl.c.
 static bool exchange(IOHIDDeviceRef device, In *in, const uint8_t *request,
                      size_t echo_len, double timeout) {
     uint8_t out[REPORT_SIZE];
@@ -281,7 +281,7 @@ static void scan_device(IOHIDDeviceRef device, bool deep, bool first) {
         } else if (CHANNELS[c].layout == LAYOUT_HALO_RING) {
             // One value id carrying the whole animation, not a set of
             // independent fields: mode, colour, speed, tail and brightness all
-            // ride in a single reply. Offsets match halo75_ledctl's halo-get.
+            // ride in a single reply. Offsets match halo65_ledctl's halo-get.
             uint8_t mode = in.buf[3];
             const char *name = mode < sizeof(HALO_MODES) / sizeof(HALO_MODES[0])
                              ? HALO_MODES[mode] : "?";

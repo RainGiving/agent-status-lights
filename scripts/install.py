@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # SPDX-License-Identifier: MIT
-"""Build, install, inspect and remove the Halo75 V2 status-light service."""
+"""Build, install, inspect and remove the Halo65 V2 status-light service."""
 
 import argparse
 import json
@@ -17,24 +17,24 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src"
 SCRIPTS = REPO / "scripts"
-APP_DIR = Path.home() / "Library" / "Application Support" / "ClaudeHalo75"
+APP_DIR = Path.home() / "Library" / "Application Support" / "ClaudeHalo65"
 BUILD_DIR = REPO / "build"
 APP_SRC = REPO / "macos-app"
 ASSETS = REPO / "assets"
 ICON_SRC = ASSETS / "icon.png"
-APP_NAME = "Claude Halo75.app"
-APP_BUNDLE_ID = "com.claudehalo75.settings"
+APP_NAME = "Claude Halo65.app"
+APP_BUNDLE_ID = "com.claudehalo65.settings"
 USER_APPS = Path.home() / "Applications"
-LAUNCH_AGENT = Path.home() / "Library" / "LaunchAgents" / "com.claudehalo75.daemon.plist"
+LAUNCH_AGENT = Path.home() / "Library" / "LaunchAgents" / "com.claudehalo65.daemon.plist"
 CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
 CODEX_HOOKS = Path.home() / ".codex" / "hooks.json"
 ORCA_CONFIG = APP_DIR / "orca.json"
 SETTINGS_JSON = APP_DIR / "settings.json"
-LABEL = "com.claudehalo75.daemon"
+LABEL = "com.claudehalo65.daemon"
 
 # The marker that identifies our entries inside a settings.json that other
 # tools also write to, so uninstall removes ours and nothing else.
-HOOK_MARKER = "ClaudeHalo75"
+HOOK_MARKER = "ClaudeHalo65"
 
 HOOK_EVENTS = (
     "UserPromptSubmit",
@@ -48,7 +48,7 @@ HOOK_EVENTS = (
 
 # Codex CLI ships the same hook contract -- same event names, and the same
 # `session_id` / `hook_event_name` keys on stdin, which are the only two fields
-# this project reads. So halo75_hook is used verbatim; only the config file
+# this project reads. So halo65_hook is used verbatim; only the config file
 # differs. The two events missing here do not exist in Codex: it has no
 # PostToolUseFailure or StopFailure, so a Codex session never turns the ring
 # red. Everything else maps one to one.
@@ -69,10 +69,10 @@ def run(cmd, **kwargs):
 def build():
     BUILD_DIR.mkdir(exist_ok=True)
     run(["clang", "-Wall", "-Wextra", "-Werror", "-O2",
-         "-o", BUILD_DIR / "halo75_ledctl", SRC / "halo75_ledctl.c",
+         "-o", BUILD_DIR / "halo65_ledctl", SRC / "halo65_ledctl.c",
          "-framework", "CoreFoundation", "-framework", "IOKit"])
     run(["clang", "-Wall", "-Wextra", "-Werror", "-O2",
-         "-o", BUILD_DIR / "halo75_hook", SRC / "halo75_hook.c"])
+         "-o", BUILD_DIR / "halo65_hook", SRC / "halo65_hook.c"])
     run(["clang", "-Wall", "-Wextra", "-Werror", "-O2",
          "-o", BUILD_DIR / "via_scan", SRC / "via_scan.c",
          "-framework", "CoreFoundation", "-framework", "IOKit"])
@@ -83,7 +83,7 @@ def build():
         run(["clang", "-Wall", "-Wextra", "-Werror", "-O2",
              "-o", BUILD_DIR / tool, SCRIPTS / f"{tool}.c",
              "-framework", "CoreFoundation", "-framework", "IOKit"])
-    print("built:", ", ".join(("halo75_ledctl", "halo75_hook", "via_scan",
+    print("built:", ", ".join(("halo65_ledctl", "halo65_hook", "via_scan",
                                "via_backup", "via_restore")))
 
 
@@ -91,7 +91,7 @@ def hook_command():
     """Claude Code runs hook commands through /bin/sh, and APP_DIR contains a
     space ("Application Support"), so the path must be quoted. Unquoted it
     splits at the space and every hook dies with exit 127."""
-    return shlex.quote(str(APP_DIR / "halo75_hook"))
+    return shlex.quote(str(APP_DIR / "halo65_hook"))
 
 
 def hook_entry():
@@ -131,7 +131,7 @@ def merge_hooks():
             print(f"  ! {CLAUDE_SETTINGS} is not valid JSON ({exc}); refusing to touch it")
             return False
         backup = CLAUDE_SETTINGS.with_name(
-            f"settings.json.halo75-backup-{time.strftime('%Y%m%d-%H%M%S')}")
+            f"settings.json.halo65-backup-{time.strftime('%Y%m%d-%H%M%S')}")
         shutil.copy2(CLAUDE_SETTINGS, backup)
         print(f"  backed up existing settings to {backup.name}")
 
@@ -151,7 +151,7 @@ def merge_hooks():
         hooks[event] = kept
         added += 1
 
-    tmp = CLAUDE_SETTINGS.with_suffix(".json.halo75-tmp")
+    tmp = CLAUDE_SETTINGS.with_suffix(".json.halo65-tmp")
     with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(settings, handle, indent=2, ensure_ascii=False)
         handle.write("\n")
@@ -170,7 +170,7 @@ def remove_hooks():
         print("  ! settings.json unreadable; left untouched")
         return
     backup = CLAUDE_SETTINGS.with_name(
-        f"settings.json.halo75-backup-{time.strftime('%Y%m%d-%H%M%S')}")
+        f"settings.json.halo65-backup-{time.strftime('%Y%m%d-%H%M%S')}")
     shutil.copy2(CLAUDE_SETTINGS, backup)
 
     hooks = settings.get("hooks", {})
@@ -185,7 +185,7 @@ def remove_hooks():
             hooks[event] = kept
         else:
             hooks.pop(event)
-    tmp = CLAUDE_SETTINGS.with_suffix(".json.halo75-tmp")
+    tmp = CLAUDE_SETTINGS.with_suffix(".json.halo65-tmp")
     with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(settings, handle, indent=2, ensure_ascii=False)
         handle.write("\n")
@@ -197,7 +197,7 @@ def write_launch_agent():
     LAUNCH_AGENT.parent.mkdir(parents=True, exist_ok=True)
     plist = {
         "Label": LABEL,
-        "ProgramArguments": ["/usr/bin/python3", str(APP_DIR / "claude_halo75_daemon.py")],
+        "ProgramArguments": ["/usr/bin/python3", str(APP_DIR / "claude_halo65_daemon.py")],
         "RunAtLoad": True,
         "KeepAlive": True,
         "StandardErrorPath": str(APP_DIR / "launchd.err.log"),
@@ -223,10 +223,10 @@ def install():
     # finds nothing is the single most likely reason an install "does not work",
     # and it is much cheaper to say so here than to debug it afterwards.
     describe_scan(run_scan())
-    for name in ("halo75_ledctl", "halo75_hook", "via_scan"):
+    for name in ("halo65_ledctl", "halo65_hook", "via_scan"):
         shutil.copy2(BUILD_DIR / name, APP_DIR / name)
         os.chmod(APP_DIR / name, 0o755)
-    for module in ("claude_halo75_daemon.py", "orca_bridge.py"):
+    for module in ("claude_halo65_daemon.py", "orca_bridge.py"):
         shutil.copy2(SRC / module, APP_DIR / module)
     # The menu bar app shells out to this for the hook buttons; only the
     # hooks-* subcommands are used from there, and those never touch REPO.
@@ -309,7 +309,7 @@ def build_app():
         print(f"  ! {APP_SRC} not found")
         return None
     run(["swift", "build", "-c", "release", "--package-path", APP_SRC])
-    binary = APP_SRC / ".build" / "release" / "ClaudeHalo75"
+    binary = APP_SRC / ".build" / "release" / "ClaudeHalo65"
     if not binary.exists():
         print("  ! swift build produced no binary")
         return None
@@ -320,18 +320,18 @@ def build_app():
     macos = bundle / "Contents" / "MacOS"
     macos.mkdir(parents=True)
     (bundle / "Contents" / "Resources").mkdir()
-    shutil.copy2(binary, macos / "ClaudeHalo75")
-    os.chmod(macos / "ClaudeHalo75", 0o755)
+    shutil.copy2(binary, macos / "ClaudeHalo65")
+    os.chmod(macos / "ClaudeHalo65", 0o755)
 
     icns = make_icns()
     if icns is not None:
         shutil.copy2(icns, bundle / "Contents" / "Resources" / "AppIcon.icns")
 
     info = {
-        "CFBundleName": "Claude Halo75",
-        "CFBundleDisplayName": "Claude Halo75",
+        "CFBundleName": "Claude Halo65",
+        "CFBundleDisplayName": "Claude Halo65",
         "CFBundleIdentifier": APP_BUNDLE_ID,
-        "CFBundleExecutable": "ClaudeHalo75",
+        "CFBundleExecutable": "ClaudeHalo65",
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": "0.2.0",
         "CFBundleVersion": "0.2.0",
@@ -389,7 +389,7 @@ def hooks_uninstall():
 # what is missing, because "your keyboard has RGB Matrix but no ring" is a
 # useful answer, not an error.
 KNOWN_BOARDS = {
-    ("0x19f5", "0x32f5"): "NuPhy Halo75 V2",
+    ("0x19f5", "0x3315"): "NuPhy Halo65 V2",
 }
 
 
@@ -483,7 +483,7 @@ def read_json(path, default):
 
 def write_json(path, payload, mode=0o600):
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".halo75-tmp")
+    tmp = path.with_suffix(path.suffix + ".halo65-tmp")
     with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, ensure_ascii=False)
         handle.write("\n")
@@ -497,9 +497,9 @@ def ring_firmware_present():
     This is the one honest test for "is the patched firmware on there": the
     stock firmware answers 0xff (unhandled) to channel 0x10, so halo-get fails.
     """
-    ledctl = APP_DIR / "halo75_ledctl"
+    ledctl = APP_DIR / "halo65_ledctl"
     if not ledctl.exists():
-        ledctl = BUILD_DIR / "halo75_ledctl"
+        ledctl = BUILD_DIR / "halo65_ledctl"
     if not ledctl.exists():
         return None
     probe = subprocess.run([str(ledctl), "halo-get"], capture_output=True, text=True)
@@ -514,7 +514,7 @@ FLASH_RECIPE = """\
     build/via_backup > backups/keymap.txt
     # hold Esc and plug the keyboard in
     dfu-util -a 0 -d 0483:df11 -s 0x08000000:leave \\
-             -D ~/qmk_nuphy/nuphy_halo75_v2_ansi_via.bin
+             -D ~/qmk_nuphy/nuphy_halo65_v2_ansi_via.bin
     build/via_restore backups/keymap.txt
 
   Full instructions, including the toolchain: firmware/README.md.
@@ -543,7 +543,7 @@ def reconnect(off=False):
     describe_scan(run_scan())
     present = ring_firmware_present()
     if present is None:
-        print("  ! halo75_ledctl not built; run 'install' first")
+        print("  ! halo65_ledctl not built; run 'install' first")
         return 1
 
     settings = read_json(SETTINGS_JSON, {})
@@ -595,7 +595,7 @@ def codex_hooks_install(remove=False):
     config = read_json(CODEX_HOOKS, {}) if CODEX_HOOKS.exists() else {}
     if CODEX_HOOKS.exists():
         backup = CODEX_HOOKS.with_name(
-            f"hooks.json.halo75-backup-{time.strftime('%Y%m%d-%H%M%S')}")
+            f"hooks.json.halo65-backup-{time.strftime('%Y%m%d-%H%M%S')}")
         shutil.copy2(CODEX_HOOKS, backup)
         print(f"  backed up existing hooks to {backup.name}")
 
@@ -708,7 +708,7 @@ def status():
         print(f"orca:     last poll {age}, {live.get('remote_sessions', 0)} remote session(s)"
               + (f", error: {health['error']}" if health.get("error") else ""))
 
-    ledctl = APP_DIR / "halo75_ledctl"
+    ledctl = APP_DIR / "halo65_ledctl"
     if ledctl.exists():
         probe = subprocess.run([str(ledctl), "get"], capture_output=True, text=True)
         print(f"keyboard: {probe.stdout.strip() or probe.stderr.strip() or 'no response'}")
@@ -727,8 +727,8 @@ def status():
 
 
 def test_hid():
-    ledctl = APP_DIR / "halo75_ledctl" if (APP_DIR / "halo75_ledctl").exists() \
-        else BUILD_DIR / "halo75_ledctl"
+    ledctl = APP_DIR / "halo65_ledctl" if (APP_DIR / "halo65_ledctl").exists() \
+        else BUILD_DIR / "halo65_ledctl"
     if not ledctl.exists():
         print("run 'build' first")
         return 1
@@ -772,7 +772,7 @@ def uninstall():
         LAUNCH_AGENT.unlink()
         print(f"  removed {LAUNCH_AGENT}")
     remove_hooks()
-    ledctl = APP_DIR / "halo75_ledctl"
+    ledctl = APP_DIR / "halo65_ledctl"
     state = APP_DIR / "state.json"
     if ledctl.exists() and state.exists():
         try:

@@ -25,7 +25,7 @@ README 只说"支持 Claude Code 和 Codex，远程会话走 Orca"。这里是�
 
 ## 其他 Agent：Codex
 
-**Codex CLI 可以直接接**，而且 `halo75_hook` 一个字节都不用改。
+**Codex CLI 可以直接接**，而且 `halo65_hook` 一个字节都不用改。
 
 Codex 的 hook 契约跟 Claude Code 是同一套：同样的事件名，stdin 上同样的
 `session_id` 和 `hook_event_name` —— 而这两个字段正好就是本项目唯一会读的两个（其余全丢，
@@ -67,7 +67,7 @@ Orca 桥接那条路是 agent 无关的：它靠终端标题里的 spinner 字�
 **默认关闭**，`reconnect` 打开。
 
 hook 只在 **`claude` 进程所在的那台机器上**触发。所以在 Orca 的 SSH 主机、或配对的远程
-Orca runtime 上起的会话，事件根本到不了本机 —— 那边既没有 `halo75_hook`，也连不上本机的
+Orca runtime 上起的会话，事件根本到不了本机 —— 那边既没有 `halo65_hook`，也连不上本机的
 unix socket。判断标准只有一条：**进程跑在哪**。你在本机跑 claude、让它自己 ssh 出去干活，
 灯是正常的；你在远程机器上敲 claude，灯就是死的。
 
@@ -92,7 +92,7 @@ Orca 会在它管理的每台主机上装自己的 hook，所以这些会话它�
 放权限标记（Orca 那个 `✋` 是 Gemini CLI 的），所以「等待权限」只能靠扫 `preview` 末尾的
 提示词 —— 措辞会随版本变，因此做成了配置项而不是写死的正则。
 
-配置在 `~/Library/Application Support/ClaudeHalo75/orca.json`，**独立于 `settings.json`**：
+配置在 `~/Library/Application Support/ClaudeHalo65/orca.json`，**独立于 `settings.json`**：
 设置 App 是用一个只认识已知字段的 Codable 结构体来回写 `settings.json` 的，加在那里的键会在
 用户下次保存时被静默丢掉。文件不存在等于关闭，也就是全新安装的状态。
 

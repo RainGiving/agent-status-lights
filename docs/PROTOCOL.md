@@ -1,14 +1,14 @@
-# NuPhy Halo75 V2 lighting over VIA — measured notes
+# NuPhy Halo65 V2 lighting over VIA — measured notes
 
-Everything here was measured against a physical NuPhy Halo75 V2 on macOS via
+Everything here was measured against a physical NuPhy Halo65 V2 on macOS via
 IOKit HID. It is not an official spec; a NuPhy firmware update could invalidate
 any of it.
 
 ## Device
 
 ```text
-Product     NuPhy Halo75 V2
-USB VID:PID 0x19f5:0x32f5
+Product     NuPhy Halo65 V2
+USB VID:PID 0x19f5:0x3315
 Transport   USB cable (a 2.4G dongle or Bluetooth does not expose the VIA interface)
 ```
 
@@ -134,10 +134,11 @@ be, or the daemon and the CLI tools could not both use it. macOS then delivers
 that simply takes the next report to arrive will therefore parse another
 process's answer as its own whenever two are active at the same time.
 
-Measured: 12 concurrent `halo75_ledctl get` calls returned **11 different
-answers and not one correct one**, with the fields visibly shuffled between
-value ids (the effect slot holding a brightness, and so on). It is not a rare
-race — with any concurrency at all it is the common case.
+Measured on the reader that predates the matching below: 12 concurrent
+`get` calls returned **11 different answers and not one correct one**, with the
+fields visibly shuffled between value ids (the effect slot holding a brightness,
+and so on). It is not a rare race — with any concurrency at all it is the common
+case.
 
 The consequence reaches past a wrong line of output. `matrix_read()` is what
 records the user's own lighting before takeover; a shuffled read is persisted
@@ -154,7 +155,7 @@ answer from another. How much it echoes depends on the command:
 
 An unhandled request comes back with byte 0 replaced by `0xff`, the remaining
 echoed bytes intact — so the match must compare byte 0 against *either* the
-command or `0xff`, and the rest exactly. Both `halo75_ledctl` and `via_scan`
+command or `0xff`, and the rest exactly. Both `halo65_ledctl` and `via_scan`
 loop, discarding reports that do not match, until theirs arrives or the
 deadline passes. Verified with 18 concurrent readers across both binaries:
 all 18 agreed, and agreed with a single reader.
@@ -166,7 +167,7 @@ of everything above against **any** keyboard, not just this one. It matches on
 HID usage page `0xFF60` / usage `0x61` rather than on a vendor/product id, so it
 finds boards nobody has mapped, then reports the VIA protocol version and sweeps
 the lighting channels to see which the firmware implements. `scan --deep` sweeps
-all 256 channel ids; on this keyboard that takes 0.8 s and confirms the finding
+all 256 channel ids; on this keyboard that takes 1.0 s and confirms the finding
 above — `0x03`, plus `0x10` once the patch is flashed, and nothing else.
 
 Channel ids are safe to sweep because they are arguments to `0x08`. VIA

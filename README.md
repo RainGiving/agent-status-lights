@@ -70,10 +70,10 @@
 
 ## 设置 App
 
-一个独立窗口：每个状态一页，选动画、取色、调亮度速度拖尾，左边有 45 点环形实时预览，
+一个独立窗口：每个状态一页，选动画、取色、调亮度速度拖尾，左边有 50 点环形实时预览，
 按固件同样的算法动。还有设备扫描结果、hooks 安装状态、重新连接按钮。
 
-配置在 `~/Library/Application Support/ClaudeHalo75/settings.json`，改完立即生效。
+配置在 `~/Library/Application Support/ClaudeHalo65/settings.json`，改完立即生效。
 **动画参数全部走线下发，调参不用重刷固件。**
 
 | 字段 | 说明 |
@@ -97,7 +97,7 @@ codex-hooks-install      # 接上 Codex CLI
 send-event Stop          # 不跑真任务测状态机
 ```
 
-日志：`tail -f ~/Library/Application\ Support/ClaudeHalo75/daemon.log`
+日志：`tail -f ~/Library/Application\ Support/ClaudeHalo65/daemon.log`
 
 ## 更多
 
@@ -125,14 +125,14 @@ Orca 桥接（默认关）会读远程终端的标题和预览来判断状态，
 
 ## 已知限制
 
-- 只支持 macOS。扫描对任何 QMK/VIA 键盘有效，内圈原理上也通用，但**只在 NuPhy Halo75 V2
-  （`19f5:32f5`）上真机验证过**。
-- 外圈需要自编译固件；官方固件更新会覆盖掉，得重刷。45 颗灯作为一个整体显示状态。
+- 只支持 macOS。扫描对任何 QMK/VIA 键盘有效，内圈原理上也通用，但**只在 NuPhy Halo65 V2
+  （`19f5:3315`）上真机验证过**。
+- 外圈需要自编译固件；官方固件更新会覆盖掉，得重刷。50 颗灯作为一个整体显示状态。
 - Codex 没有失败事件，**Codex 会话不会变红**；这条路径也还没在真机验证过。
 - 远程会话只有「执行中 / 等待权限 / 完成」三档，测不出工具失败，且只覆盖 Orca 里起的会话。
 - 键区背光亮度上限 254（固件 off-by-one，肉眼无差别）。
 
 灵感来自 [codex-kick75-status-lights](https://github.com/Pixelmoss/codex-kick75-status-lights)，
-硬件层是完全重写的：那个项目走 Kick75 的私有 HID 协议，Halo75 V2 是标准 QMK + VIA。
+硬件层是完全重写的：那个项目走 Kick75 的私有 HID 协议，Halo65 V2 是标准 QMK + VIA。
 
 MIT。非官方工具，与 Anthropic、OpenAI、NuPhy 均无隶属关系。

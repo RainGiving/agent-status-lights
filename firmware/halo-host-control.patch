@@ -1,7 +1,7 @@
-diff --git a/keyboards/nuphy/halo75_v2/ansi/ansi.c b/keyboards/nuphy/halo75_v2/ansi/ansi.c
-index 8e01b95..ad6a1f8 100644
---- a/keyboards/nuphy/halo75_v2/ansi/ansi.c
-+++ b/keyboards/nuphy/halo75_v2/ansi/ansi.c
+diff --git a/keyboards/nuphy/halo65_v2/ansi/ansi.c b/keyboards/nuphy/halo65_v2/ansi/ansi.c
+index ffed3ec..f3a4c42 100644
+--- a/keyboards/nuphy/halo65_v2/ansi/ansi.c
++++ b/keyboards/nuphy/halo65_v2/ansi/ansi.c
 @@ -791,3 +791,81 @@ void housekeeping_task_kb(void)
      Sleep_Handle();
  
@@ -84,10 +84,10 @@ index 8e01b95..ad6a1f8 100644
 +    }
 +}
 +#endif
-diff --git a/keyboards/nuphy/halo75_v2/ansi/ansi.h b/keyboards/nuphy/halo75_v2/ansi/ansi.h
-index 9a2c393..af6142d 100644
---- a/keyboards/nuphy/halo75_v2/ansi/ansi.h
-+++ b/keyboards/nuphy/halo75_v2/ansi/ansi.h
+diff --git a/keyboards/nuphy/halo65_v2/ansi/ansi.h b/keyboards/nuphy/halo65_v2/ansi/ansi.h
+index 3137fc7..3f8e64c 100644
+--- a/keyboards/nuphy/halo65_v2/ansi/ansi.h
++++ b/keyboards/nuphy/halo65_v2/ansi/ansi.h
 @@ -203,4 +203,34 @@ typedef struct
  } user_config_t;
  
@@ -124,11 +124,11 @@ index 9a2c393..af6142d 100644
 +void halo_host_set(const halo_host_t *cfg);
  #define f_dev_sleep_enable  user_config.ee_dev_config.bit0
 \ No newline at end of file
-diff --git a/keyboards/nuphy/halo75_v2/ansi/side.c b/keyboards/nuphy/halo75_v2/ansi/side.c
-index 1f545e8..731b25b 100644
---- a/keyboards/nuphy/halo75_v2/ansi/side.c
-+++ b/keyboards/nuphy/halo75_v2/ansi/side.c
-@@ -1095,6 +1095,90 @@ void rgb_test_show(void)
+diff --git a/keyboards/nuphy/halo65_v2/ansi/side.c b/keyboards/nuphy/halo65_v2/ansi/side.c
+index f381029..38d6dd4 100644
+--- a/keyboards/nuphy/halo65_v2/ansi/side.c
++++ b/keyboards/nuphy/halo65_v2/ansi/side.c
+@@ -1101,6 +1101,94 @@ void rgb_test_show(void)
  /**
   * @brief  side_led_show.
   */
@@ -136,6 +136,10 @@ index 1f545e8..731b25b 100644
 + * Host-driven Halo ring -- see halo_host_t in ansi.h.
 + * ------------------------------------------------------------------------ */
 +halo_host_t halo_host = {.mode = HALO_HOST_RELEASE};
++
++/* Ring length comes from the board's own table -- 50 on the Halo65 V2 -- so the
++ * count is not a second thing to keep in sync. */
++#define HALO_HOST_LED_NUM ((uint8_t)(sizeof(side_led_index_tab) / sizeof(side_led_index_tab[0])))
 +
 +static uint32_t halo_host_timer = 0;
 +static uint32_t halo_host_phase = 0;
@@ -171,23 +175,23 @@ index 1f545e8..731b25b 100644
 +
 +    switch (halo_host.mode) {
 +        case HALO_HOST_SOLID:
-+            for (uint8_t i = 0; i < 45; i++) halo_host_pixel(i, 255);
++            for (uint8_t i = 0; i < HALO_HOST_LED_NUM; i++) halo_host_pixel(i, 255);
 +            break;
 +
 +        case HALO_HOST_PULSE: {
 +            /* Reuses the firmware's own breathe curve so it feels native. */
 +            uint8_t phase = (halo_host_phase % cycle_ms) * BREATHE_TAB_LEN / cycle_ms;
 +            uint8_t level = breathe_data_tab[phase];
-+            for (uint8_t i = 0; i < 45; i++) halo_host_pixel(i, level);
++            for (uint8_t i = 0; i < HALO_HOST_LED_NUM; i++) halo_host_pixel(i, level);
 +            break;
 +        }
 +
 +        case HALO_HOST_COMET: {
 +            uint8_t tail = halo_host.param ? halo_host.param : 12;
-+            if (tail > 45) tail = 45;
-+            uint8_t head = (halo_host_phase / step_ms) % 45;
-+            for (uint8_t i = 0; i < 45; i++) {
-+                uint8_t behind = (uint8_t)((head + 45 - i) % 45);
++            if (tail > HALO_HOST_LED_NUM) tail = HALO_HOST_LED_NUM;
++            uint8_t head = (halo_host_phase / step_ms) % HALO_HOST_LED_NUM;
++            for (uint8_t i = 0; i < HALO_HOST_LED_NUM; i++) {
++                uint8_t behind = (uint8_t)((head + HALO_HOST_LED_NUM - i) % HALO_HOST_LED_NUM);
 +                uint8_t level  = behind < tail ? (uint8_t)(255 - behind * 255 / tail) : 0;
 +                halo_host_pixel(i, level);
 +            }
@@ -199,15 +203,15 @@ index 1f545e8..731b25b 100644
 +            uint32_t period = cycle_ms / 3;   /* an alert should read as fast */
 +            if (period == 0) period = 1;
 +            bool on = (halo_host_phase % period) < (period * duty / 100);
-+            for (uint8_t i = 0; i < 45; i++) halo_host_pixel(i, on ? 255 : 0);
++            for (uint8_t i = 0; i < HALO_HOST_LED_NUM; i++) halo_host_pixel(i, on ? 255 : 0);
 +            break;
 +        }
 +
 +        case HALO_HOST_FILL: {
 +            /* Sweeps around once, then holds the whole ring lit. */
 +            uint32_t filled = halo_host_phase / step_ms;
-+            if (filled > 45) filled = 45;
-+            for (uint8_t i = 0; i < 45; i++) halo_host_pixel(i, i < filled ? 255 : 0);
++            if (filled > HALO_HOST_LED_NUM) filled = HALO_HOST_LED_NUM;
++            for (uint8_t i = 0; i < HALO_HOST_LED_NUM; i++) halo_host_pixel(i, i < filled ? 255 : 0);
 +            break;
 +        }
 +
@@ -219,7 +223,7 @@ index 1f545e8..731b25b 100644
  void m_side_led_show(void)
  {
      static bool flag_power_on         = 1;
-@@ -1113,6 +1197,19 @@ void m_side_led_show(void)
+@@ -1119,6 +1207,19 @@ void m_side_led_show(void)
         return;
      }
  

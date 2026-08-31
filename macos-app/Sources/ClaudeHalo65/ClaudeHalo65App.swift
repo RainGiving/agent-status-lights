@@ -3,12 +3,12 @@ import AppKit
 import SwiftUI
 
 @main
-struct ClaudeHalo75App: App {
+struct ClaudeHalo65App: App {
     @StateObject private var model = AppModel()
     @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
-        Window("Claude Halo75", id: "main") {
+        Window("Claude Halo65", id: "main") {
             RootView()
                 .environmentObject(model)
                 .onAppear { NSApp.activate(ignoringOtherApps: true) }
@@ -16,7 +16,7 @@ struct ClaudeHalo75App: App {
         .defaultSize(width: 880, height: 600)
 
         // Quick access without leaving the window open all day.
-        MenuBarExtra("Claude Halo75", systemImage: "circle.dashed") {
+        MenuBarExtra("Claude Halo65", systemImage: "circle.dashed") {
             Button("打开设置…") {
                 openWindow(id: "main")
                 NSApp.activate(ignoringOtherApps: true)

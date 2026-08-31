@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import AppKit
-import ClaudeHalo75Core
+import ClaudeHalo65Core
 import SwiftUI
 
 enum SidebarItem: Hashable {
@@ -355,7 +355,7 @@ struct StateDetailView: View {
                 }
             }
             .padding(6)
-        } label: { Label("外圈 · Halo 环形灯（45 颗）", systemImage: "circle.dashed") }
+        } label: { Label("外圈 · Halo 环形灯（50 颗）", systemImage: "circle.dashed") }
     }
 
     @ViewBuilder

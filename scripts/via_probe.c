@@ -1,4 +1,4 @@
-// Read-only VIA probe for NuPhy Halo75 V2. Sends only get/query commands.
+// Read-only VIA probe for NuPhy Halo65 V2. Sends only get/query commands.
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/hid/IOHIDLib.h>
 #include <stdbool.h>
@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 
-enum { VID = 0x19f5, PID = 0x32f5, USAGE_PAGE = 0xff60, USAGE = 0x61, RPT = 32 };
+enum { VID = 0x19f5, PID = 0x3315, USAGE_PAGE = 0xff60, USAGE = 0x61, RPT = 32 };
 
 typedef struct { bool received; IOReturn result; CFIndex len; uint8_t buf[RPT]; } In;
 
@@ -48,11 +48,11 @@ int main(void) {
     IOHIDManagerOpen(mgr, kIOHIDOptionsTypeNone);
 
     CFSetRef set = IOHIDManagerCopyDevices(mgr);
-    if (!set) { fprintf(stderr, "Halo75 V2 not found\n"); return 2; }
+    if (!set) { fprintf(stderr, "Halo65 V2 not found\n"); return 2; }
     CFIndex n = CFSetGetCount(set);
     IOHIDDeviceRef list[n]; CFSetGetValues(set, (const void **)list);
     IOHIDDeviceRef dev = NULL;
-    printf("=== HID interfaces for 19f5:32f5 ===\n");
+    printf("=== HID interfaces for %04x:%04x ===\n", VID, PID);
     for (CFIndex i = 0; i < n; i++) {
         long up = prop(list[i], CFSTR(kIOHIDPrimaryUsagePageKey));
         long u  = prop(list[i], CFSTR(kIOHIDPrimaryUsageKey));

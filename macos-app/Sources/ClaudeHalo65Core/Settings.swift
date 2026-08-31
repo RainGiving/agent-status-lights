@@ -20,7 +20,7 @@ public enum HaloMode: String, CaseIterable, Codable, Sendable {
 
     public var paramRange: ClosedRange<Double> {
         switch self {
-        case .comet:  return 2...45
+        case .comet:  return 2...50
         case .strobe: return 5...95
         default:      return 0...255
         }
@@ -38,7 +38,7 @@ public enum HaloMode: String, CaseIterable, Codable, Sendable {
     }
 }
 
-/// The 45-LED ring around the base.
+/// The 50-LED ring around the base.
 public struct HaloSpec: Codable, Equatable, Sendable {
     public var color: String
     public var brightness: Int
@@ -242,7 +242,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
 public enum SettingsStore {
     public static var directory: URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/ClaudeHalo75")
+            .appendingPathComponent("Library/Application Support/ClaudeHalo65")
     }
     public static var url: URL { directory.appendingPathComponent("settings.json") }
 

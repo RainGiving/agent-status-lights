@@ -2,10 +2,10 @@
 import PackageDescription
 
 let package = Package(
-    name: "ClaudeHalo75",
+    name: "ClaudeHalo65",
     platforms: [.macOS(.v13)],
     targets: [
-        .target(name: "ClaudeHalo75Core"),
-        .executableTarget(name: "ClaudeHalo75", dependencies: ["ClaudeHalo75Core"]),
+        .target(name: "ClaudeHalo65Core"),
+        .executableTarget(name: "ClaudeHalo65", dependencies: ["ClaudeHalo65Core"]),
     ]
 )

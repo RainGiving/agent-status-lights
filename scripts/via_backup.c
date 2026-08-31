@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Read-only backup of the Halo75 V2's VIA dynamic keymap, taken before flashing.
+// Read-only backup of the Halo65 V2's VIA dynamic keymap, taken before flashing.
 // Sends only id_dynamic_keymap_get_layer_count (0x11) and
 // id_dynamic_keymap_get_buffer (0x12) -- both reads. Writes the raw buffer to
 // stdout as hex so it can be replayed later with id_dynamic_keymap_set_buffer.
@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 
-enum { VID=0x19f5, PID=0x32f5, UP=0xff60, US=0x61, RPT=32, CHUNK=28 };
+enum { VID=0x19f5, PID=0x3315, UP=0xff60, US=0x61, RPT=32, CHUNK=28 };
 typedef struct { bool received; IOReturn result; CFIndex len; uint8_t buf[RPT]; } In;
 
 static long prop(IOHIDDeviceRef d, CFStringRef k){
@@ -72,7 +72,7 @@ int main(void){
     int total=layers*rows*cols*2;
     fprintf(stderr,"layers=%d rows=%d cols=%d  keymap buffer=%d bytes\n",layers,rows,cols,total);
 
-    printf("# halo75_v2 VIA dynamic keymap backup\n");
+    printf("# halo65_v2 VIA dynamic keymap backup\n");
     printf("# layers=%d rows=%d cols=%d bytes=%d\n",layers,rows,cols,total);
     for(int off=0; off<total; off+=CHUNK){
         int len = (total-off) < CHUNK ? (total-off) : CHUNK;

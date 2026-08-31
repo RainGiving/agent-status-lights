@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-import ClaudeHalo75Core
+import ClaudeHalo65Core
 import SwiftUI
 
-/// A 45-dot ring that runs the same animation the firmware does, so a tail
+/// A 50-dot ring that runs the same animation the firmware does, so a tail
 /// length or speed can be judged without watching the keyboard.
 ///
 /// The timing constants mirror halo_host_show() in side.c. PULSE is the one
@@ -13,7 +13,7 @@ struct RingPreview: View {
     var dotSize: CGFloat = 7
     var radius: CGFloat = 62
 
-    private static let ledCount = 45
+    private static let ledCount = 50
 
     var body: some View {
         TimelineView(.animation) { context in
@@ -62,7 +62,7 @@ struct RingPreview: View {
             return Int((t < 0.5 ? t * 2 : (1 - t) * 2) * 255)
 
         case .comet:
-            let tail = max(1, min(45, style.param == 0 ? 12 : style.param))
+            let tail = max(1, min(50, style.param == 0 ? 12 : style.param))
             let head = Int(phase / stepMs) % Self.ledCount
             let behind = (head + Self.ledCount - index) % Self.ledCount
             return behind < tail ? 255 - behind * 255 / tail : 0

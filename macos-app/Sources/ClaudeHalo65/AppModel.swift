@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import ClaudeHalo75Core
+import ClaudeHalo65Core
 import Foundation
 import SwiftUI
 
@@ -134,7 +134,7 @@ final class AppModel: ObservableObject {
             guard let groups = value as? [[String: Any]] else { continue }
             for group in groups {
                 guard let entries = group["hooks"] as? [[String: Any]] else { continue }
-                if entries.contains(where: { ($0["command"] as? String)?.contains("ClaudeHalo75") == true }) {
+                if entries.contains(where: { ($0["command"] as? String)?.contains("ClaudeHalo65") == true }) {
                     count += 1
                 }
             }

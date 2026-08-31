@@ -37,7 +37,7 @@ import threading
 import time
 from pathlib import Path
 
-APP_DIR = Path.home() / "Library" / "Application Support" / "ClaudeHalo75"
+APP_DIR = Path.home() / "Library" / "Application Support" / "ClaudeHalo65"
 CONFIG_PATH = APP_DIR / "orca.json"
 
 SOURCE = "orca"

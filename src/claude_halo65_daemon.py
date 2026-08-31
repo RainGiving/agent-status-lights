@@ -1,10 +1,10 @@
 #!/usr/bin/python3
 # SPDX-License-Identifier: MIT
-"""Status-light daemon: maps Claude Code hook events onto the Halo75 V2 lights.
+"""Status-light daemon: maps Claude Code hook events onto the Halo65 V2 lights.
 
 Two zones are driven independently and can run together:
 
-  halo    the 45-LED ring around the base, via the vendor VIA channel added by
+  halo    the 50-LED ring around the base, via the vendor VIA channel added by
           firmware/halo-host-control.patch
   matrix  the typing-area RGB Matrix, via stock VIA
 
@@ -21,11 +21,11 @@ import threading
 import time
 from pathlib import Path
 
-APP_DIR = Path.home() / "Library" / "Application Support" / "ClaudeHalo75"
+APP_DIR = Path.home() / "Library" / "Application Support" / "ClaudeHalo65"
 SOCKET_PATH = APP_DIR / "status.sock"
 STATE_PATH = APP_DIR / "state.json"
 SETTINGS_PATH = APP_DIR / "settings.json"
-LEDCTL = APP_DIR / "halo75_ledctl"
+LEDCTL = APP_DIR / "halo65_ledctl"
 LOG_PATH = APP_DIR / "daemon.log"
 LOG_MAX_BYTES = 1024 * 1024
 

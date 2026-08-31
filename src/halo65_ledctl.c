@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// NuPhy Halo75 V2 RGB Matrix controller over the VIA raw HID channel (macOS).
+// NuPhy Halo65 V2 RGB Matrix controller over the VIA raw HID channel (macOS).
 // Only volatile id_custom_set_value writes are sent; id_custom_save is never used,
 // so nothing is persisted to keyboard EEPROM.
 #include <CoreFoundation/CoreFoundation.h>
@@ -11,8 +11,8 @@
 #include <string.h>
 
 enum {
-    HALO75_VID = 0x19f5,
-    HALO75_PID = 0x3315,   /* NuPhy Halo65 V2 (upstream ships 0x32f5 = Halo75 V2) */
+    HALO65_VID = 0x19f5,
+    HALO65_PID = 0x3315,   /* NuPhy Halo65 V2 (NuPhy ships 0x32f5 on the Halo75 V2) */
     VIA_USAGE_PAGE = 0xff60,
     VIA_USAGE = 0x61,
     REPORT_SIZE = 32,
@@ -123,7 +123,7 @@ static bool rgb_set(IOHIDDeviceRef dev, In *in, uint8_t value_id, uint8_t a, uin
 }
 
 static IOHIDDeviceRef find_via_device(IOHIDManagerRef mgr) {
-    int vid = HALO75_VID, pid = HALO75_PID;
+    int vid = HALO65_VID, pid = HALO65_PID;
     CFNumberRef vn = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &vid);
     CFNumberRef pn = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &pid);
     const void *keys[] = {CFSTR(kIOHIDVendorIDKey), CFSTR(kIOHIDProductIDKey)};
@@ -172,13 +172,13 @@ static bool parse_u8(const char *text, uint8_t *out) {
 static void usage(void) {
     fprintf(stderr,
         "usage:\n"
-        "  halo75_ledctl get\n"
-        "  halo75_ledctl set <effect> <hue> <sat> <brightness>\n"
-        "  halo75_ledctl color <hue> <sat> <brightness>\n"
-        "  halo75_ledctl restore <effect> <hue> <sat> <brightness> <speed>\n"
+        "  halo65_ledctl get\n"
+        "  halo65_ledctl set <effect> <hue> <sat> <brightness>\n"
+        "  halo65_ledctl color <hue> <sat> <brightness>\n"
+        "  halo65_ledctl restore <effect> <hue> <sat> <brightness> <speed>\n"
         "\n"
-        "  halo75_ledctl halo <mode> <r> <g> <b> <speed> <param> <brightness>\n"
-        "  halo75_ledctl halo-get\n"
+        "  halo65_ledctl halo <mode> <r> <g> <b> <speed> <param> <brightness>\n"
+        "  halo65_ledctl halo-get\n"
         "      mode: release|solid|pulse|comet|strobe|fill\n"
         "      param: comet tail length in LEDs, or strobe duty cycle percent\n"
         "      needs the halo-host-control firmware patch; stock firmware answers\n"
@@ -191,7 +191,7 @@ int main(int argc, char **argv) {
 
     IOHIDManagerRef mgr = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
     IOHIDDeviceRef dev = find_via_device(mgr);
-    if (!dev) { fprintf(stderr, "Halo75 V2 VIA interface not found (USB cable connected?)\n"); return 2; }
+    if (!dev) { fprintf(stderr, "Halo65 V2 VIA interface not found (USB cable connected?)\n"); return 2; }
     if (IOHIDDeviceOpen(dev, kIOHIDOptionsTypeNone) != kIOReturnSuccess) {
         fprintf(stderr, "VIA raw HID open failed (quit VIA / NuPhy Console and retry)\n");
         return 3;

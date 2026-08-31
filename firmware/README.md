@@ -1,11 +1,11 @@
 # Halo ring host control — firmware patch
 
-`halo-host-control.patch` adds a host-driven override for the 45-LED Halo ring
-to NuPhy's own Halo75 V2 firmware. Stock firmware exposes the ring only through
+`halo-host-control.patch` adds a host-driven override for the 50-LED Halo ring
+to NuPhy's own Halo65 V2 firmware. Stock firmware exposes the ring only through
 `Fn + M` keycodes; nothing in VIA can reach it (a sweep of `id_custom_get_value`
 across all 256 channels answers on `0x03`, the standard RGB Matrix, alone).
 
-The patch adds ~544 bytes and touches three files:
+The patch adds 532 bytes and touches three files:
 
 | File | Change |
 | --- | --- |
@@ -53,7 +53,7 @@ git clone --branch nuphy-keyboards https://github.com/nuphy-src/qmk_firmware ~/q
 cd ~/qmk_nuphy
 git submodule update --init --depth 1 lib/chibios lib/chibios-contrib lib/printf lib/lufa lib/vusb
 git apply /path/to/halo-host-control.patch
-qmk compile -kb nuphy/halo75_v2/ansi -km via
+qmk compile -kb nuphy/halo65_v2/ansi -km via
 ```
 
 Homebrew's `arm-none-eabi-gcc` ships without newlib and cannot build this; use
@@ -66,7 +66,7 @@ Back up the VIA keymap first — entering the bootloader wipes EEPROM:
 ```bash
 build/via_backup > backups/keymap.txt
 # hold Esc and plug the keyboard in
-dfu-util -a 0 -d 0483:df11 -s 0x08000000:leave -D ~/qmk_nuphy/nuphy_halo75_v2_ansi_via.bin
+dfu-util -a 0 -d 0483:df11 -s 0x08000000:leave -D ~/qmk_nuphy/nuphy_halo65_v2_ansi_via.bin
 build/via_restore backups/keymap.txt
 ```
 

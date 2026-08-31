@@ -31,7 +31,7 @@ int main(void) {
     if (!home) { free(buf); return 0; }
     char path[512];
     snprintf(path, sizeof(path),
-             "%s/Library/Application Support/ClaudeHalo75/status.sock", home);
+             "%s/Library/Application Support/ClaudeHalo65/status.sock", home);
 
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) { free(buf); return 0; }
