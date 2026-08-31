@@ -2,8 +2,8 @@
   "color-space-for-untagged-svg-colors": "display-p3",
   "fill": {
     "linear-gradient": [
-      "extended-srgb:0.42353,0.50196,0.76863,1.00000",
-      "extended-srgb:0.51765,0.71765,0.72941,1.00000"
+      "extended-srgb:1.00000,1.00000,1.00000,1.00000",
+      "extended-srgb:1.00000,1.00000,1.00000,1.00000"
     ]
   },
   "groups": [
@@ -21,27 +21,9 @@
       "specular": true,
       "translucency": {
         "enabled": true,
-        "value": 1
+        "value": 0.35
       },
       "glass": true
-    },
-    {
-      "layers": [
-        {
-          "image-name": "backdrop.svg",
-          "name": "Backdrop"
-        }
-      ],
-      "shadow": {
-        "kind": "none",
-        "opacity": 0.0
-      },
-      "specular": false,
-      "translucency": {
-        "enabled": false,
-        "value": 0
-      },
-      "glass": false
     }
   ],
   "supported-platforms": {
