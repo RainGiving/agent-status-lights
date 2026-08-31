@@ -309,12 +309,20 @@ def install():
         shutil.copy2(BUILD_DIR / name, APP_DIR / name)
         os.chmod(APP_DIR / name, 0o755)
     # TCC records Input Monitoring against the binary's code identity, and an
-    # unsigned binary has none it can hold on to. Ad-hoc signing with a fixed
-    # identifier is what makes the grant survive at all -- it still has to be
-    # given again after a rebuild, because the hash is part of the identity.
+    # unsigned binary has none it can hold on to. With ad-hoc signing the
+    # identity pins the binary's hash, so every rebuild loses the grant; a
+    # certificate identity is identifier + leaf, which rebuilds keep. The
+    # "ClaudeHalo65 Signing" self-signed certificate is created once by hand
+    # (Keychain Access or openssl + security import/add-trusted-cert); when
+    # it is absent this falls back to ad-hoc and the re-grant dance returns.
+    identity = "-"
+    found = subprocess.run(["security", "find-identity", "-v", "-p", "codesigning"],
+                           capture_output=True, text=True)
+    if "ClaudeHalo65 Signing" in found.stdout:
+        identity = "ClaudeHalo65 Signing"
     for binary, identifier in (("halo65_voice", "com.claudehalo65.voice"),
                                ("halo65_leds", "com.claudehalo65.leds")):
-        subprocess.run(["codesign", "--force", "--sign", "-",
+        subprocess.run(["codesign", "--force", "--sign", identity,
                         "--identifier", identifier, str(APP_DIR / binary)],
                        capture_output=True)
     for module in ("claude_halo65_daemon.py", "orca_bridge.py"):
