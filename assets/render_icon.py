@@ -20,16 +20,23 @@ S = 2048                  # supersampled square, downsampled 2x at the end
 CX = CY = S / 2
 R = 304.0 * 2
 HEAD_DEG = -45.0
-TAIL_SWEEP = 300.0
-W_HEAD, W_TAIL = 148.0 * 2, 30.0 * 2
+TAIL_SWEEP = 360.0
+W_HEAD, W_TAIL = 150.0 * 2, 100.0 * 2
 EDGE = 2.4                # soft-edge half-width in supersampled pixels
 
+# The first icon's colour wheel, saturated a touch: hues spaced evenly
+# around the full circle so no side of the ring outweighs another. t runs
+# from the thin tip (just ahead of the head) back to the head itself.
 STOPS = [
-    (0.00, (0xC9, 0x43, 0xDE)),   # magenta, fades out
-    (0.28, (0x8B, 0x53, 0xF7)),   # violet
-    (0.52, (0x47, 0x6B, 0xFF)),   # blue
-    (0.82, (0x00, 0xA8, 0xFF)),   # azure (the app's running colour)
-    (1.00, (0x2E, 0xBE, 0xFF)),   # sky blue into the head
+    (0.000, (0x52, 0xC4, 0xC0)),   # teal, in front of the head under the glow
+    (0.125, (0x6E, 0xC9, 0x83)),   # green
+    (0.250, (0xE8, 0xC8, 0x60)),   # gold
+    (0.375, (0xF5, 0xA8, 0x68)),   # apricot
+    (0.500, (0xEE, 0x7E, 0x92)),   # rose
+    (0.625, (0xD0, 0x7A, 0xC4)),   # orchid
+    (0.750, (0x9E, 0x7F, 0xE6)),   # violet
+    (0.875, (0x6F, 0x9B, 0xE8)),   # periwinkle
+    (1.000, (0x2E, 0xBE, 0xFF)),   # azure into the head (the running colour)
 ]
 
 yy, xx = np.mgrid[0:S, 0:S].astype(np.float64)
@@ -43,34 +50,18 @@ t = 1.0 - delta / TAIL_SWEEP
 in_tail = delta <= TAIL_SWEEP
 tc = np.clip(t, 0.0, 1.0)
 
-TRACK_W = 18.0 * 2
-
-# --- tail alpha, computed first so the track can yield to it -----------------
-# Over the last tenth the band narrows into the track and fades to nothing,
-# so the tip merges instead of ending in a squared-off cut.
-width = W_TAIL + (W_HEAD - W_TAIL) * tc ** 1.4
-k_tip = np.clip(tc / 0.10, 0.0, 1.0)
-k_tip = k_tip * k_tip * (3 - 2 * k_tip)
-width = TRACK_W + (width - TRACK_W) * k_tip
+# --- ring band ---------------------------------------------------------------
+# The band spans the full circle; where t wraps from 1 back to 0 the width and
+# opacity step, but that seam sits exactly at the head's angular position and
+# the opaque head disc covers it.
+width = W_TAIL + (W_HEAD - W_TAIL) * tc ** 1.2
 dist = np.abs(r - R)
 coverage = np.clip((width / 2 + EDGE - dist) / (2 * EDGE), 0.0, 1.0)
-fade = (0.13 + 0.87 * tc ** 1.3) * k_tip ** 0.7
+fade = 0.72 + 0.28 * tc ** 1.3
 tail_a = np.where(in_tail, coverage * fade, 0.0)
 
-# --- orbit track: a faint complete ring under the comet ----------------------
-# It closes the circle visually where the tail has faded out, which is what
-# keeps the icon from reading as a lone crescent. Where the tail actually
-# covers it the track must vanish, or its extra alpha shows as a darker
-# stripe running inside the band.
-track_a = np.clip((TRACK_W / 2 + EDGE - dist) / (2 * EDGE), 0.0, 1.0) * 0.30
-track_a = track_a * np.clip(1.0 - tail_a / 0.22, 0.0, 1.0)
-track_rgb = np.zeros((S, S, 3))
-track_rgb[..., 0] = 0xAA
-track_rgb[..., 1] = 0xC2
-track_rgb[..., 2] = 0xF2
-
-rgb = track_rgb.copy()
-alpha = track_a.copy()
+rgb = np.zeros((S, S, 3))
+alpha = np.zeros((S, S))
 
 
 def over(a_new, rgb_new):
@@ -119,10 +110,10 @@ def disc_at(cx, cy, radius, colour, a_max=1.0):
 # (position along the tail, radial offset from the ring, radius, opacity).
 # Colours follow the tail at that point, lightened toward white.
 SPARKS = [
-    (0.93,  102.0, 14.0, 0.95),
-    (0.85,  -96.0, 10.0, 0.80),
-    (0.76,  112.0,  8.0, 0.65),
-    (0.66,  -88.0,  6.5, 0.50),
+    (0.92,  104.0, 13.0, 0.95),
+    (0.71, -100.0,  9.0, 0.80),
+    (0.46,  110.0,  9.5, 0.80),
+    (0.21,  -98.0,  8.0, 0.70),
 ]
 for st, off, rad, a_max in SPARKS:
     ang = np.radians(angle(st))
@@ -152,8 +143,14 @@ over(glow_a, glow_rgb)
 disc_at(hx, hy, 86.0 * 2, (0xC4, 0xEF, 0xFF))
 disc_at(hx, hy, 58.0 * 2, (0xFF, 0xFF, 0xFF))
 
-art = np.dstack([rgb, alpha[..., None] * 255]).astype(np.uint8)
-layer = Image.fromarray(art).resize((1024, 1024), Image.LANCZOS)
+# Stay in float through the downsample and dither at the final resolution:
+# noise added before averaging gets averaged away again, and the slow angular
+# gradient then shows its 8-bit steps as radial bands.
+art = np.dstack([rgb, alpha[..., None] * 255])
+art = art.reshape(1024, 2, 1024, 2, 4).mean(axis=(1, 3))
+rng = np.random.default_rng(20260831)
+art = art + (rng.random(art.shape) - rng.random(art.shape)) * 0.75
+layer = Image.fromarray(np.clip(art, 0, 255).astype(np.uint8))
 layer_path = ASSETS / "HALO.icon" / "Assets" / "comet.png"
 layer.save(layer_path)
 print("wrote", layer_path)
