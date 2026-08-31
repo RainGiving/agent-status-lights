@@ -12,7 +12,7 @@
 
 enum {
     HALO75_VID = 0x19f5,
-    HALO75_PID = 0x32f5,
+    HALO75_PID = 0x3315,   /* NuPhy Halo65 V2 (upstream ships 0x32f5 = Halo75 V2) */
     VIA_USAGE_PAGE = 0xff60,
     VIA_USAGE = 0x61,
     REPORT_SIZE = 32,
