@@ -275,20 +275,42 @@ public struct AppSettings: Codable, Equatable, Sendable {
         }
     }
 
+    /// One line under the page title. The longer story lives in detail(_:),
+    /// shown behind an info icon so the page itself stays quiet.
     public static func explanation(_ key: String) -> String {
         switch key {
+        case "running":    return "提交问题后、Claude 正在工作时显示。"
+        case "permission": return "Claude 在等你批准某个操作时显示。"
+        case "failure":    return "工具执行失败时短暂亮起。"
+        case "completed":  return "一轮回答结束后亮起，倒计时结束熄灭。"
+        case "voice":      return "你正在语音输入时显示，压过其他所有状态。"
+        case "idle":       return "没有任何任务时的样子。"
+        default:           return ""
+        }
+    }
+
+    public static func detail(_ key: String) -> String {
+        switch key {
         case "running":
-            return "提交问题后、Claude 正在工作时显示。这个状态你看得最多，选一个不刺眼的。"
+            return "这个状态出现得最多，适合选不刺眼的颜色。默认是彗星绕圈：余光里"
+                + "「一个点在转」读起来就是在干活，和整环明灭的「等你批准」拉开距离。"
         case "permission":
-            return "Claude 在等你批准某个操作。这个要最抓眼 —— 整环同步明灭比局部运动更容易在余光里被注意到。"
+            return "这个状态要最抓眼。整环同步明灭比局部运动更容易在余光里被注意到，"
+                + "所以默认是琥珀色整环脉冲。只要有任何一个会话在等你批准，它就会显示。"
         case "failure":
-            return "工具执行失败时闪一下。Bash 退出码非 0 就算，所以它是瞬时提示，保持几秒后自动回到「执行中」。"
+            return "Bash 退出码非 0 就算失败，日常操作也会触发，所以红色是短暂提示"
+                + "而不是常驻模式：保护窗内不被「执行中」顶掉，之后由下一个事件切换走。"
+                + "保护窗时长在本页调节。"
         case "completed":
-            return "一轮回答结束、等你下一句时显示，保持一段时间后回到默认状态。"
+            return "绿色可以被任何新状态打断，打断后不再回来 —— 完成已经被看到，"
+                + "之后的灯只反映新的事。没被打断时，倒计时结束后回到默认状态。"
+                + "倒计时时长在本页调节。"
         case "voice":
-            return "你按下语音输入快捷键、或者麦克风被占用时显示。它压过上面四个状态：那几个是后台在做什么，这个是你此刻正在做什么。"
+            return "其余状态说的是后台在做什么，这个说的是你此刻正在做什么，"
+                + "所以优先级最高：口述时盖住一个还在转圈的彗星是对的。触发方式在本页配置。"
         case "idle":
-            return "没有任何任务时的样子。默认是把两圈都交还固件 —— 也就是恢复你自己用 Fn 键设的灯效。也可以在这里指定一套固定的默认灯效。"
+            return "默认把两圈都交还固件，恢复你自己用 Fn 键设的灯效。"
+                + "也可以关掉「恢复我自己的键区灯效」，改用这里指定的一套固定灯效。"
         default:
             return ""
         }
@@ -297,8 +319,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public static let defaults = AppSettings(
         version: 3,
         // The ring needs the patched firmware, so it is opt-in; the typing
-        // area works on factory firmware and is what ships on. See "重新连接键盘"
-        // in the advanced page.
+        // area works on factory firmware and is what ships on. See
+        // "外圈与远程会话" in the advanced page.
         zones: Zones(halo: false, matrix: true),
         completedHoldSeconds: 10,
         failureHoldSeconds: 4,

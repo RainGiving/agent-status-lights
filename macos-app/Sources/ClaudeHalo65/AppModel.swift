@@ -11,7 +11,7 @@ final class AppModel: ObservableObject {
     @Published var status: DaemonStatus?
     @Published var message: String?
     @Published var messageIsError = false
-    @Published var hooksInstalled: Int = 0
+    @Published var installedHookEvents: Set<String> = []
     /// nil until the first scan finishes, or when via_scan is not installed;
     /// an empty array means the scan ran and found no QMK keyboard on USB.
     @Published var scanned: [ScannedDevice]?
@@ -22,6 +22,8 @@ final class AppModel: ObservableObject {
 
     var isDirty: Bool { settings != saved }
     var daemonRunning: Bool { status?.ok == true }
+    var hooksInstalled: Int { installedHookEvents.count }
+    /// The VIA halo channel answered just now, i.e. USB with patched firmware.
     var haloSupported: Bool { status?.haloSupported == true }
     var sessionsByState: [String: Int] { status?.sessionsByState ?? [:] }
 
@@ -34,15 +36,51 @@ final class AppModel: ObservableObject {
         return p
     }
 
+    /// Whether the ring can be driven right now, over either channel. VIA is
+    /// only reachable over USB, so haloSupported alone would call a Bluetooth
+    /// keyboard "uncontrollable" while its ring is following states just fine
+    /// through the LED-bit channel.
+    var haloControllable: Bool { haloSupported || isWireless }
+
     var transportLine: (ok: Bool, warn: Bool, text: String) {
         switch transport {
         case "usb":
-            return (true, false, "有线连接（USB · VIA）：改动即时生效")
+            return (true, false, "USB 有线连接：改动即时生效")
         case "bluetooth":
-            return (true, true, "蓝牙连接（LED 位通道）：状态即时，改配置需数秒同步")
+            return (true, false, "蓝牙连接：状态即时，改配置需数秒同步")
         default:
-            return (false, false, "没有可达的键盘（USB 和蓝牙都不在）")
+            return (false, false, "键盘未连接（USB 和蓝牙都不可达）")
         }
+    }
+
+    /// Two or three words for the status bar; the full story is transportLine.
+    var transportBrief: String {
+        switch transport {
+        case "usb":       return "USB 有线"
+        case "bluetooth": return "蓝牙"
+        default:          return "键盘未连接"
+        }
+    }
+
+    var ringLine: (ok: Bool, warn: Bool, text: String) {
+        if haloSupported { return (true, false, "外圈可控 · USB（VIA 通道）") }
+        if isWireless { return (true, false, "外圈可控 · 蓝牙（LED 位通道）") }
+        if transport == "usb" {
+            return (false, true, "外圈不可控：固件没有 Halo 补丁")
+        }
+        return (false, false, "外圈不可控：键盘未连接")
+    }
+
+    /// A state's colour, for sidebar dots and session chips. The handed-back
+    /// idle look has no colour of its own and shows as neutral grey.
+    func stateColor(_ key: String) -> Color {
+        guard let spec = settings.states[key] else { return .gray }
+        if spec.halo.haloMode == .release && spec.matrix.restore {
+            return .secondary.opacity(0.5)
+        }
+        guard let rgb = ColorHex.parse(spec.halo.color) else { return .gray }
+        return Color(.sRGB, red: Double(rgb.r) / 255,
+                     green: Double(rgb.g) / 255, blue: Double(rgb.b) / 255)
     }
 
     init() {
@@ -124,7 +162,7 @@ final class AppModel: ObservableObject {
 
     func refreshStatus() {
         status = try? DaemonClient.status()
-        hooksInstalled = Self.countInstalledHooks()
+        installedHookEvents = Self.scanInstalledHooks()
     }
 
     func preview(_ key: String) {
@@ -153,26 +191,30 @@ final class AppModel: ObservableObject {
 
     // MARK: - hooks
 
+    /// The 7 events the installer wires up, in lifecycle order.
+    static let hookEvents = ["UserPromptSubmit", "PermissionRequest", "PostToolUse",
+                             "PostToolUseFailure", "Stop", "StopFailure", "SessionEnd"]
+
     /// Reads settings.json directly rather than asking the daemon: hooks are a
     /// property of the Claude Code config, not of the running service, and they
     /// need to be inspectable even when the daemon is down.
-    static func countInstalledHooks() -> Int {
+    static func scanInstalledHooks() -> Set<String> {
         let url = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/settings.json")
         guard let data = try? Data(contentsOf: url),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let hooks = root["hooks"] as? [String: Any] else { return 0 }
-        var count = 0
-        for (_, value) in hooks {
+              let hooks = root["hooks"] as? [String: Any] else { return [] }
+        var installed: Set<String> = []
+        for (event, value) in hooks {
             guard let groups = value as? [[String: Any]] else { continue }
             for group in groups {
                 guard let entries = group["hooks"] as? [[String: Any]] else { continue }
                 if entries.contains(where: { ($0["command"] as? String)?.contains("ClaudeHalo65") == true }) {
-                    count += 1
+                    installed.insert(event)
                 }
             }
         }
-        return count
+        return installed
     }
 
     /// Shell out to the installed copy of install.py. Every button that changes
