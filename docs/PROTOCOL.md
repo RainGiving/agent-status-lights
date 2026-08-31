@@ -198,15 +198,18 @@ them into a status channel; `src/halo65_leds.c` is the encoder,
 | --- | --- |
 | `00` | idle (also the OS's natural resting value — see the wipe rules) |
 | `01` | running |
-| `10` | permission |
-| `11` | escape; the next symbol is `00` completed, `01` failure, `10` voice |
+| `10` | voice |
+| `11` | escape; the next symbol is `00` completed, `01` failure, `10` permission |
 
-The `00` operand belongs to completed **deliberately**: `00` doubles as the
-idle code, so the one escaped state whose re-assert cycle contains `00`
-phases must be the one where a worst-case misread into idle is harmless —
-completed decays into idle anyway. The first assignment gave `00` to voice,
-and stretched `00` phases over a jittery link flickered the user's own
-lighting into a held voice state.
+The direct codes carry the latency-critical states. Voice is the one the
+user triggers by hand and stares at, so it must land in one sample
+(~0.2 s); permission persists for minutes and can afford the escape's extra
+phase. The `00` operand belongs to completed **deliberately**: `00` doubles
+as the idle code, so the one escaped state whose re-assert cycle contains
+`00` phases must be the one where a worst-case misread into idle is
+harmless — completed decays into idle anyway. (The first assignment gave
+`00` to voice, and stretched `00` phases over a jittery link flickered the
+user's own lighting into a held voice state.)
 
 Direct states are re-asserted by rewriting the same value every 100 ms.
 Escaped states re-assert as a repeating `11`/operand cycle, 250 ms per
@@ -291,11 +294,11 @@ random phases:
 
 | State change to | min | median | max (ms) |
 | --- | --- | --- | --- |
-| running / permission (from a direct state) | 25 | ~190 | ~250 |
-| running / permission (leaving an escaped state) | — | ~540 | ~1070 |
-| failure | 522 | 562 | 603 |
-| completed / voice | 518 | ~590–750 | ~1050 |
-| idle | 500 | 550 | 681 |
+| running | 13 | ~100 | ~240 |
+| voice | 37 | ~210 | ~600 |
+| permission | 513 | 558 | 590 |
+| failure / completed | 557 | ~815–830 | ~1080 |
+| idle | 500 | 663 | ~1070 |
 
 The escaped-state and leaving-escaped figures carry the hardening costs:
 the 500 ms first-`11` phase on entry, and pair completion plus quiet

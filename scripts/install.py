@@ -101,8 +101,7 @@ def build():
          "-framework", "CoreAudio", "-framework", "IOKit"])
     run(["clang", "-Wall", "-Wextra", "-Werror", "-O2",
          "-o", BUILD_DIR / "halo65_leds", SRC / "halo65_leds.c",
-         "-framework", "CoreFoundation", "-framework", "IOKit",
-         "-framework", "ApplicationServices"])
+         "-framework", "CoreFoundation", "-framework", "IOKit"])
     # Only the firmware path uses these, but build/ is not checked in, so a
     # fresh clone that skipped them would reach "back up the keymap before
     # DFU" with no way to do it -- the one step that must not be skipped.

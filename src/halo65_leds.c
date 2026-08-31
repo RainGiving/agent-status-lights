@@ -23,7 +23,6 @@
 // behind Input Monitoring, so this runs as its own launch agent: the
 // permission belongs to this binary rather than to the Python daemon that
 // decides what to send.
-#include <ApplicationServices/ApplicationServices.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/hid/IOHIDLib.h>
 #include <IOKit/hid/IOHIDUsageTables.h>
@@ -168,15 +167,20 @@ static struct {
 /* Provided by the caller: writes one 2-bit symbol to the wire. */
 static void wire_write(int symbol, uint64_t now);
 
-static bool is_escaped(int state) { return state >= 3; }
+/* Direct codes carry the latency-critical states -- 00 idle, 01 running,
+ * 10 voice -- and the escape carries 00 completed, 01 failure,
+ * 10 permission. See halo_link.h for why each code sits where it does. */
+static bool is_escaped(int state) { return state == 2 || state == 3 || state == 4; }
 
-/* failure -> 01, completed -> 00, voice -> 10; see halo_link.h for why the
- * 00 operand belongs to completed of all states. */
+static int direct_symbol(int state) { return state == 5 ? 2 : state; }
+
 static int operand_of(int state) {
     return state == 3 ? 1 : state == 4 ? 0 : 2;
 }
 
-static int park_symbol(int state) { return is_escaped(state) ? 3 : state; }
+static int park_symbol(int state) {
+    return is_escaped(state) ? 3 : direct_symbol(state);
+}
 
 static uint8_t field_payload_len(uint8_t field) {
     switch (field) {
@@ -274,8 +278,8 @@ static void engine_tick(uint64_t now) {
                 eng.phase_at = now;
                 break;
             }
-            if (eng.wire != g_cmd.state || now - eng.wrote_at >= REWRITE_MS) {
-                wire_write(g_cmd.state, now);
+            if (eng.wire != direct_symbol(g_cmd.state) || now - eng.wrote_at >= REWRITE_MS) {
+                wire_write(direct_symbol(g_cmd.state), now);
             }
             break;
 
@@ -412,26 +416,29 @@ static char            g_transports[128];
 static int             g_devices;
 
 /* Writes both data bits to every Halo65 keyboard interface in ONE output
- * report per report id. Atomicity is load-bearing: setting the two LED
- * elements one IOHIDDeviceSetValue at a time becomes two BLE writes, and a
- * two-bit change (11 -> 00) then shows an intermediate symbol on the wire
- * for a connection interval -- long enough for the keyboard's 50 ms poll to
- * read a state that was never sent (measured: an escape/00 re-assert cycle
- * flashed failure and voice into a held completed). The report carries the
- * OS's real Caps Lock state, so our writes never fight the caps indicator.
+ * report. Atomicity is load-bearing: setting the two LED elements one
+ * IOHIDDeviceSetValue at a time becomes two BLE writes, and a two-bit change
+ * (11 -> 00) then shows an intermediate symbol on the wire for a connection
+ * interval -- long enough for the keyboard's 50 ms poll to read a state that
+ * was never sent (measured: an escape/00 re-assert cycle flashed failure and
+ * voice into a held completed).
  *
- * Layout is the boot-keyboard LED report -- bit = usage - 1 -- which both
- * the USB interface and the BLE report map use here. If SetReport is ever
- * refused, the per-element path is kept as a logged fallback. */
+ * The report is composed by an IOHIDTransaction over the two elements, so
+ * the HID family lays the bits out from the descriptor. Hand-building the
+ * byte from the boot-keyboard convention was tried first and reported
+ * success while lighting nothing -- the BLE report map's bit order is not
+ * ours to guess. Elements outside the transaction keep their cached values,
+ * so Caps Lock stays whatever the OS last wrote, same as the old path.
+ *
+ * Both data bits must come from the SAME report id: the BLE map carries LED
+ * outputs on two reports, and elements from different reports would commit
+ * as two writes, atomic no more. */
 static int write_bits(int num, int scroll, bool verbose) {
     CFSetRef devices = IOHIDManagerCopyDevices(g_manager);
     if (!devices) { g_devices = 0; g_transports[0] = '\0'; return 0; }
     CFIndex count = CFSetGetCount(devices);
     IOHIDDeviceRef *list = calloc((size_t)count ? (size_t)count : 1, sizeof(IOHIDDeviceRef));
     CFSetGetValues(devices, (const void **)list);
-
-    bool caps = (CGEventSourceFlagsState(kCGEventSourceStateCombinedSessionState)
-                 & kCGEventFlagMaskAlphaShift) != 0;
 
     int  touched = 0;
     char transports[128] = "";
@@ -448,64 +455,72 @@ static int write_bits(int num, int scroll, bool verbose) {
             if (verbose) logline("%s (%s): no elements -- input monitoring?", product, transport);
             continue;
         }
-        /* One LED output report per report id seen on this interface. */
-        struct { uint32_t rid; uint8_t byte; bool carries_data; } reports[4];
-        int nreports = 0;
-        IOHIDElementRef el_num = NULL, el_scroll = NULL;
+        /* Pick the lowest report id that carries BOTH data bits. */
+        struct { uint32_t rid; IOHIDElementRef el_num, el_scroll; } groups[4];
+        int ngroups = 0;
         for (CFIndex e = 0; e < CFArrayGetCount(elements); e++) {
             IOHIDElementRef el = (IOHIDElementRef)CFArrayGetValueAtIndex(elements, e);
             if (IOHIDElementGetUsagePage(el) != kHIDPage_LEDs) continue;
             uint32_t usage = IOHIDElementGetUsage(el);
-            if (usage < kHIDUsage_LED_NumLock || usage > kHIDUsage_LED_Kana) continue;
-            if (usage == kHIDUsage_LED_NumLock) el_num = el;
-            if (usage == kHIDUsage_LED_ScrollLock) el_scroll = el;
+            if (usage != kHIDUsage_LED_NumLock && usage != kHIDUsage_LED_ScrollLock) continue;
             uint32_t rid = IOHIDElementGetReportID(el);
             int slot = -1;
-            for (int r = 0; r < nreports; r++) {
-                if (reports[r].rid == rid) { slot = r; break; }
+            for (int g = 0; g < ngroups; g++) {
+                if (groups[g].rid == rid) { slot = g; break; }
             }
-            if (slot < 0 && nreports < 4) {
-                slot = nreports++;
-                reports[slot].rid = rid;
-                reports[slot].byte = 0;
-                reports[slot].carries_data = false;
+            if (slot < 0 && ngroups < 4) {
+                slot = ngroups++;
+                groups[slot].rid = rid;
+                groups[slot].el_num = NULL;
+                groups[slot].el_scroll = NULL;
             }
             if (slot < 0) continue;
-            int value = usage == kHIDUsage_LED_NumLock    ? num
-                      : usage == kHIDUsage_LED_CapsLock   ? (caps ? 1 : 0)
-                      : usage == kHIDUsage_LED_ScrollLock ? scroll : 0;
-            reports[slot].byte |= (uint8_t)(value << (usage - kHIDUsage_LED_NumLock));
-            if (usage == kHIDUsage_LED_NumLock || usage == kHIDUsage_LED_ScrollLock) {
-                reports[slot].carries_data = true;
-            }
+            if (usage == kHIDUsage_LED_NumLock) groups[slot].el_num = el;
+            else                                groups[slot].el_scroll = el;
         }
+        int pick = -1;
+        for (int g = 0; g < ngroups; g++) {
+            if (!groups[g].el_num || !groups[g].el_scroll) continue;
+            if (pick < 0 || groups[g].rid < groups[pick].rid) pick = g;
+        }
+
         bool wrote = false;
-        bool need_fallback = false;
-        for (int r = 0; r < nreports; r++) {
-            if (!reports[r].carries_data) continue;
-            uint8_t payload = reports[r].byte;
-            if (IOHIDDeviceSetReport(dev, kIOHIDReportTypeOutput,
-                                     (CFIndex)reports[r].rid, &payload, 1) == kIOReturnSuccess) {
-                wrote = true;
-            } else {
-                need_fallback = true;
+        if (pick >= 0) {
+            IOHIDTransactionRef txn = IOHIDTransactionCreate(
+                kCFAllocatorDefault, dev, kIOHIDTransactionDirectionTypeOutput, 0);
+            if (txn) {
+                IOHIDElementRef els[2] = {groups[pick].el_num, groups[pick].el_scroll};
+                int vals[2] = {num, scroll};
+                for (int k = 0; k < 2; k++) {
+                    IOHIDTransactionAddElement(txn, els[k]);
+                    IOHIDValueRef v = IOHIDValueCreateWithIntegerValue(
+                        kCFAllocatorDefault, els[k], 0, vals[k]);
+                    IOHIDTransactionSetValue(txn, els[k], v, 0);
+                    CFRelease(v);
+                }
+                wrote = IOHIDTransactionCommit(txn) == kIOReturnSuccess;
+                CFRelease(txn);
             }
         }
-        if (need_fallback && !wrote && (el_num || el_scroll)) {
-            /* Last resort: the old element-at-a-time path. Not atomic, but a
-             * flickering channel still beats a dead one. */
+        if (!wrote) {
+            /* No same-report pair, or the commit failed: the old
+             * element-at-a-time path. Not atomic, but a flickering channel
+             * still beats a dead one. */
             static bool warned = false;
-            if (!warned) {
+            if (!warned && pick >= 0) {
                 warned = true;
-                logline("SetReport refused, falling back to per-element LED writes");
+                logline("transaction commit failed, falling back to per-element writes");
             }
-            IOHIDElementRef els[2] = {el_num, el_scroll};
-            int vals[2] = {num, scroll};
-            for (int k = 0; k < 2; k++) {
-                if (!els[k]) continue;
-                IOHIDValueRef v = IOHIDValueCreateWithIntegerValue(kCFAllocatorDefault,
-                                                                   els[k], 0, vals[k]);
-                if (IOHIDDeviceSetValue(dev, els[k], v) == kIOReturnSuccess) wrote = true;
+            for (CFIndex e = 0; e < CFArrayGetCount(elements); e++) {
+                IOHIDElementRef el = (IOHIDElementRef)CFArrayGetValueAtIndex(elements, e);
+                if (IOHIDElementGetUsagePage(el) != kHIDPage_LEDs) continue;
+                uint32_t usage = IOHIDElementGetUsage(el);
+                int value;
+                if (usage == kHIDUsage_LED_NumLock)         value = num;
+                else if (usage == kHIDUsage_LED_ScrollLock) value = scroll;
+                else continue;
+                IOHIDValueRef v = IOHIDValueCreateWithIntegerValue(kCFAllocatorDefault, el, 0, value);
+                if (IOHIDDeviceSetValue(dev, el, v) == kIOReturnSuccess) wrote = true;
                 CFRelease(v);
             }
         }
