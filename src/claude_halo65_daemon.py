@@ -449,13 +449,17 @@ class WirelessLink:
         self.state_num = 0
         self.frames_hex = ""
         self.frames_id = 0
-        # Continue the id sequence across restarts so an old id is never
-        # reused for new content.
+        # Carry the previous id *and* content across restarts: the id so an
+        # old number is never reused for new frames, the content so the file
+        # round-trips whole -- an id without its frames would leave the sender
+        # unable to mark it done and the app stuck on "syncing".
         try:
             with open(LED_STATE_PATH, encoding="utf-8") as handle:
                 for line in handle:
                     if line.startswith("frames_id="):
                         self.frames_id = int(line.split("=", 1)[1])
+                    elif line.startswith("frames="):
+                        self.frames_hex = line.split("=", 1)[1].strip()
         except (OSError, ValueError):
             pass
         self._written = None
@@ -475,7 +479,7 @@ class WirelessLink:
 
     def _write(self):
         content = f"state={self.state_num}\n"
-        if self.frames_id:
+        if self.frames_id and self.frames_hex:
             content += f"frames={self.frames_hex}\nframes_id={self.frames_id}\n"
         if content == self._written:
             return
@@ -949,7 +953,8 @@ def handle_command(aggregator, request):
             transport = "none"
         syncing = (transport == "bluetooth"
                    and (leds.get("mode") == "sync"
-                        or frames_done < WIRELESS.frames_id))
+                        or (bool(WIRELESS.frames_hex)
+                            and frames_done < WIRELESS.frames_id)))
 
         return {
             "ok": True, "version": VERSION, "state": state, "sessions": sessions,
