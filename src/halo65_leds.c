@@ -42,14 +42,21 @@
 #define STATE_COUNT       6
 
 /* Encoder timings (ms). The decoder's thresholds in halo_link.h are what
- * they must clear: refresh 100 < wipe guard 300; escape phase 250 < entry
- * 800; symbol 100 > one fast-poll interval (50) plus BLE jitter; rep gap 450
+ * they must clear: refresh 100 < wipe guard 300; escape phases < entry 800;
+ * symbol 100 > one fast-poll interval (50) plus BLE jitter; rep gap 450
  * inside (300, 700); park 900 > exit 700. The entry hold must beat the
  * decoder's 800 ms measured from when it *samples* the 11 -- which can lag
  * the write by a full slow-poll interval (200 ms) plus BLE delay -- so
- * 1200 keeps ~150 ms of margin before the first data symbol. */
+ * 1200 keeps ~150 ms of margin before the first data symbol.
+ *
+ * The first 11 of a fresh escape cycle is held 500 ms: entering the cycle
+ * the keyboard still polls slowly, and a single lost poll would make a
+ * 250 ms prefix invisible, turning the operand into a false direct state
+ * (the "brief running-blue before failure" defect). 500 survives one lost
+ * slow poll and still sits under the 800 ms config-entry threshold. */
 #define REWRITE_MS        100
 #define ESCAPE_PHASE_MS   250
+#define ESCAPE_FIRST_MS   500
 #define ENTRY_HOLD_MS     1200
 #define SYMBOL_MS         100
 #define REP_GAP_MS        450
@@ -148,6 +155,7 @@ static struct {
     int      wire;         /* last symbol written, -1 = nothing yet */
     uint64_t wrote_at;
     int      pair_state;   /* escaped state the current 11/operand pair asserts */
+    bool     pair_first;   /* fresh cycle: hold the 11 for ESCAPE_FIRST_MS */
     uint8_t  trits[1024];  /* all copies, flat */
     int      ntrits, itrit;
     int      copy_end[40]; /* trit index where each copy ends */
@@ -161,9 +169,10 @@ static void wire_write(int symbol, uint64_t now);
 
 static bool is_escaped(int state) { return state >= 3; }
 
-/* failure -> 01, completed -> 10, voice -> 00; see halo_link.c. */
+/* failure -> 01, completed -> 00, voice -> 10; see halo_link.h for why the
+ * 00 operand belongs to completed of all states. */
 static int operand_of(int state) {
-    return state == 3 ? 1 : state == 4 ? 2 : 0;
+    return state == 3 ? 1 : state == 4 ? 0 : 2;
 }
 
 static int park_symbol(int state) { return is_escaped(state) ? 3 : state; }
@@ -258,6 +267,7 @@ static void engine_tick(uint64_t now) {
             if (frames_pending(now)) { xmit_start(now); break; }
             if (is_escaped(g_cmd.state)) {
                 eng.pair_state = g_cmd.state;
+                eng.pair_first = true;
                 wire_write(3, now);
                 eng.phase    = PH_PAIR_ESC;
                 eng.phase_at = now;
@@ -272,7 +282,8 @@ static void engine_tick(uint64_t now) {
          * outstanding escape after sampling the 11, and whatever it sees next
          * is consumed as the operand. */
         case PH_PAIR_ESC:
-            if (in_phase >= ESCAPE_PHASE_MS) {
+            if (in_phase >= (eng.pair_first ? ESCAPE_FIRST_MS : ESCAPE_PHASE_MS)) {
+                eng.pair_first = false;
                 wire_write(operand_of(eng.pair_state), now);
                 eng.phase    = PH_PAIR_OP;
                 eng.phase_at = now;
@@ -285,6 +296,7 @@ static void engine_tick(uint64_t now) {
             if (in_phase >= ESCAPE_PHASE_MS) {
                 if (frames_pending(now)) { xmit_start(now); break; }
                 if (is_escaped(g_cmd.state)) {
+                    eng.pair_first = g_cmd.state != eng.pair_state;
                     eng.pair_state = g_cmd.state;
                     wire_write(3, now);
                     eng.phase    = PH_PAIR_ESC;

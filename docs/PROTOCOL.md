@@ -199,18 +199,36 @@ them into a status channel; `src/halo65_leds.c` is the encoder,
 | `00` | idle (also the OS's natural resting value — see the wipe rules) |
 | `01` | running |
 | `10` | permission |
-| `11` | escape; the next symbol is `01` failure, `10` completed, `00` voice |
+| `11` | escape; the next symbol is `00` completed, `01` failure, `10` voice |
+
+The `00` operand belongs to completed **deliberately**: `00` doubles as the
+idle code, so the one escaped state whose re-assert cycle contains `00`
+phases must be the one where a worst-case misread into idle is harmless —
+completed decays into idle anyway. The first assignment gave `00` to voice,
+and stretched `00` phases over a jittery link flickered the user's own
+lighting into a held voice state.
 
 Direct states are re-asserted by rewriting the same value every 100 ms.
-Escaped states re-assert as a repeating `11`(250 ms)/operand(250 ms) cycle.
-A started pair always completes, so the decoder's outstanding escape can
-never consume a fresh direct symbol as its operand.
+Escaped states re-assert as a repeating `11`/operand cycle, 250 ms per
+phase — except the **first** `11` of a fresh cycle, held 500 ms: on entry
+the keyboard still polls slowly, and one lost poll would make a 250 ms
+prefix invisible, decoding the operand as a false direct state (measured on
+hardware as a brief running-blue before failure). A started pair always
+completes, so the decoder's outstanding escape can never consume a fresh
+direct symbol as its operand.
 
 The decoder trusts any non-zero symbol immediately (only the sender writes
 those bits non-zero). `00` is ambiguous — sender-idle or OS wipe — so it is
-accepted only after 300 ms of persistence, and ignored outright for 300 ms
-after a caps edge. Idle therefore costs one refresh period extra; the other
-five states do not.
+accepted only after 450 ms of persistence, and ignored outright for 300 ms
+after a caps edge.
+
+One exit needs care: leaving an escaped state for a direct state whose
+symbol equals the operand the cycle just ended on (voice→idle both `00`
+before the remap; failure→running both `01`) leaves **no edge** on the
+wire, and the display would stick — confirmed in simulation. The decoder
+therefore re-latches: an escaped state's cycle produces an edge at least
+every 500 ms, so a wire quiet for 700 ms while an escaped state is shown
+means the daemon moved on; the standing symbol is then decoded as if fresh.
 
 ### Adaptive polling
 
@@ -255,11 +273,13 @@ Every decoder threshold sits below the matching sender timing:
 
 | Decoder (halo_link.h) | ms | Sender (halo65_leds.c) | ms |
 | --- | --- | --- | --- |
-| wipe guard / zero confirm | 300 | status rewrite | 100 |
+| wipe guard | 300 | status rewrite | 100 |
+| zero confirm | 450 | operand-00 phase | 250 |
 | config entry (from its sample) | 800 | entry hold | 1200 |
 | frame-gap reset | 300 | inter-copy gap | 450 |
 | config exit (silence) | 700 | park hold | 900 |
-| — | — | escape phase | 250 |
+| quiet re-latch | 700 | cycle edge period | ≤500 |
+| — | — | escape phase (first) | 250 (500) |
 | — | — | data symbol | 100 |
 
 ### Simulated end-to-end latencies
@@ -271,19 +291,20 @@ random phases:
 
 | State change to | min | median | max (ms) |
 | --- | --- | --- | --- |
-| running / permission | 25 | ~170 | ~580 |
-| failure | 279 | 314 | 342 |
-| completed / voice | 288 | ~360–620 | 840 |
-| idle | 338 | 387 | 563 |
+| running / permission (from a direct state) | 25 | ~190 | ~250 |
+| running / permission (leaving an escaped state) | — | ~540 | ~1070 |
+| failure | 522 | 562 | 603 |
+| completed / voice | 518 | ~590–750 | ~1050 |
+| idle | 500 | 550 | 681 |
 
-The direct-state maxima come from leaving an escaped state (the started
-pair must finish, up to 500 ms); the escaped-state maximum from a pair that
-straddles a slow-poll gap and is only read on the next cycle. 30 caps-press
-trials against every held state produced zero spurious transitions, and a
-colour-change frame went from queued to applied in **~7.6 s** (entry 1.2 s
-+ two 2.8 s copies + debounce). A 10-minute fuzz of random states, wipes
-and syncs settled correctly and never stored a corrupted frame — CRC-8 plus
-the 2-match rule held.
+The escaped-state and leaving-escaped figures carry the hardening costs:
+the 500 ms first-`11` phase on entry, and pair completion plus quiet
+re-latch on exit. 30 caps-press trials against every held state produced
+zero spurious transitions — with 10 % simulated poll loss a 30 s voice hold
+stayed clean in 40/40 runs — and a colour-change frame went from queued to
+applied in **~7.6 s** (entry 1.2 s + two 2.8 s copies + debounce). A
+10-minute fuzz of random states, wipes and syncs settled correctly and
+never stored a corrupted frame — CRC-8 plus the 2-match rule held.
 
 On-hardware Bluetooth numbers are to be measured after the reflash; the
 model's BLE-delay envelope (5–35 ms) is the untested assumption.

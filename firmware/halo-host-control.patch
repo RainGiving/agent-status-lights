@@ -239,10 +239,10 @@ index 5993965..a554f37 100644
  #define SYS_MODE_PIN                C1
 diff --git a/keyboards/nuphy/halo65_v2/ansi/halo_link.c b/keyboards/nuphy/halo65_v2/ansi/halo_link.c
 new file mode 100644
-index 0000000..c0d050d
+index 0000000..b5d56ef
 --- /dev/null
 +++ b/keyboards/nuphy/halo65_v2/ansi/halo_link.c
-@@ -0,0 +1,246 @@
+@@ -0,0 +1,265 @@
 +// Copyright 2026 agent-status-lights
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +/* Decoder for the wireless status link -- protocol only, no hardware access,
@@ -258,6 +258,7 @@ index 0000000..c0d050d
 +    bool     started;
 +    uint8_t  raw;        /* last raw LED byte, caps bit included */
 +    uint8_t  sym;        /* last accepted 2-bit data symbol */
++    uint32_t edge_at;    /* last accepted wire transition */
 +    uint32_t wipe_until; /* ignore 00 until then (OS rewrote the report) */
 +    uint8_t  shown;
 +    bool     esc;        /* escape prefix seen, operand outstanding */
@@ -419,6 +420,7 @@ index 0000000..c0d050d
 +        lk.started = true;
 +        lk.raw     = raw;
 +        lk.sym     = data;
++        lk.edge_at = now;
 +        if (data == 3) {
 +            lk.esc    = true;
 +            lk.esc_at = now;
@@ -457,12 +459,29 @@ index 0000000..c0d050d
 +        if (lk.zero_wait && data == 0 && !before(now, lk.zero_at + HALO_LINK_ZERO_CONFIRM_MS)) {
 +            lk.zero_wait = false;
 +            show(HALO_LINK_IDLE);
++            return;
++        }
++        /* An escaped state is kept alive by its re-assert cycle: an edge at
++         * least every 500 ms. A wire this quiet means the daemon moved to a
++         * direct state whose symbol equals what the cycle happened to end on
++         * -- voice ending into idle, failure into running -- which leaves no
++         * edge to decode. Re-latch the standing value like a config exit. */
++        if (lk.shown >= HALO_LINK_FAILURE && !lk.esc
++                && !before(now, lk.edge_at + HALO_LINK_RELATCH_MS)) {
++            lk.edge_at = now; /* one relatch per quiet period */
++            switch (data) {
++                case 3:  lk.esc = true; lk.esc_at = now; break;
++                case 1:  show(HALO_LINK_RUNNING); break;
++                case 2:  show(HALO_LINK_PERMISSION); break;
++                default: lk.zero_wait = true; lk.zero_at = now; break;
++            }
 +        }
 +        return;
 +    }
 +
 +    uint8_t prev = lk.sym;
 +    lk.sym       = data;
++    lk.edge_at   = now;
 +
 +    if (lk.config) {
 +        /* data != prev, so the trit is 0-2 by construction. */
@@ -479,7 +498,7 @@ index 0000000..c0d050d
 +    if (lk.esc) {
 +        lk.esc = false;
 +        show(data == 1 ? HALO_LINK_FAILURE
-+                       : data == 2 ? HALO_LINK_COMPLETED : HALO_LINK_VOICE);
++                       : data == 2 ? HALO_LINK_VOICE : HALO_LINK_COMPLETED);
 +        return;
 +    }
 +    if (data == 0) {
@@ -491,10 +510,10 @@ index 0000000..c0d050d
 +}
 diff --git a/keyboards/nuphy/halo65_v2/ansi/halo_link.h b/keyboards/nuphy/halo65_v2/ansi/halo_link.h
 new file mode 100644
-index 0000000..887d880
+index 0000000..5e7a762
 --- /dev/null
 +++ b/keyboards/nuphy/halo65_v2/ansi/halo_link.h
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,93 @@
 +// Copyright 2026 agent-status-lights
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +#pragma once
@@ -510,10 +529,14 @@ index 0000000..887d880
 + * (bit 0) and ScrollLock (bit 2): one 2-bit symbol per sample.
 + *
 + * Status symbols: 00 idle, 01 running, 10 permission. 11 is an escape prefix;
-+ * the following symbol selects 01 failure, 10 completed, 00 voice. Escaped
++ * the following symbol selects 00 completed, 01 failure, 10 voice. Escaped
 + * states are re-asserted as a repeating 11/operand cycle, direct states as a
 + * periodic rewrite of the same value, so a state survives the OS overwriting
-+ * the report.
++ * the report. Completed gets the 00 operand deliberately: 00 doubles as the
++ * idle code and as what an OS rewrite leaves behind, so the state whose
++ * cycle contains 00 phases must be the one where a worst-case misread into
++ * idle is harmless -- completed decays into idle anyway. Voice and failure
++ * cycles contain no 00 at all.
 + *
 + * Holding 11 for HALO_LINK_ENTRY_MS switches the decoder into config mode,
 + * where every wire transition carries one base-3 digit: the sender always
@@ -564,13 +587,16 @@ index 0000000..887d880
 +#define HALO_LINK_SLOT_MAGIC 0x5A
 +
 +/* Decoder thresholds, all in ms. The sender's timings sit above each one:
-+ * refresh 150 < wipe guard 300; escape phase 250 < entry 800; inter-rep gap
-+ * 450 > frame gap 300 but < exit 700; park hold 900 > exit 700. */
++ * refresh 100 < wipe guard 300; escape phases 250/500 < entry 800; operand-00
++ * phase 250 (+jitter) < zero confirm 450; inter-rep gap 450 > frame gap 300
++ * but < exit 700; park hold 900 > exit 700; re-assert edges every 250 <
++ * quiet relatch 700. */
 +#define HALO_LINK_WIPE_GUARD_MS   300
-+#define HALO_LINK_ZERO_CONFIRM_MS 300
++#define HALO_LINK_ZERO_CONFIRM_MS 450
 +#define HALO_LINK_ENTRY_MS        800
 +#define HALO_LINK_FRAME_GAP_MS    300
 +#define HALO_LINK_EXIT_MS         700
++#define HALO_LINK_RELATCH_MS      700
 +
 +/* Feed one sampled LED byte (low 3 bits meaningful). `now` is timer_read32()
 + * at the sample, passed in so the decoder stays testable off-target. */
