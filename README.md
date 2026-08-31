@@ -20,7 +20,7 @@
 把下面这段粘贴给 Claude Code 或 Codex：
 
 ```text
-帮我安装 https://github.com/royzjq/agent-status-lights ：克隆仓库后，严格按照仓库里的
+帮我安装 https://github.com/RainGiving/agent-status-lights ：克隆仓库后，严格按照仓库里的
 docs/AI-INSTALL.md 执行，遇到需要我动手的步骤停下来问我。如果我的键盘不是
 NuPhy Halo65 V2，按文档里的适配分支告诉我哪些功能可用。
 ```
@@ -199,6 +199,7 @@ Orca 桥接（默认关）会读远程终端的标题和预览来判断状态，
 - 远程会话只有「执行中 / 等待权限 / 完成」三档，测不出工具失败，且只覆盖 Orca 里起的会话。
 - 键区背光亮度上限 254（固件 off-by-one，肉眼无差别）。
 
+基于 [royzjq/agent-status-lights](https://github.com/royzjq/agent-status-lights) 继续开发，提交历史保留了原作者的工作。
 灵感来自 [codex-kick75-status-lights](https://github.com/Pixelmoss/codex-kick75-status-lights)，
 硬件层是完全重写的：那个项目走 Kick75 的私有 HID 协议，Halo65 V2 是标准 QMK + VIA。
 

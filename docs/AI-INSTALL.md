@@ -10,7 +10,7 @@ Codex，agent 读到这里，然后照着往下执行。
 ## 给用户：粘贴这一段
 
 ```text
-帮我安装 https://github.com/royzjq/agent-status-lights ：克隆仓库后，严格按照仓库里的
+帮我安装 https://github.com/RainGiving/agent-status-lights ：克隆仓库后，严格按照仓库里的
 docs/AI-INSTALL.md 执行，遇到需要我动手的步骤停下来问我。如果我的键盘不是
 NuPhy Halo65 V2，按文档里的适配分支告诉我哪些功能可用。
 ```
@@ -48,7 +48,7 @@ NuPhy Halo65 V2，按文档里的适配分支告诉我哪些功能可用。
 
 ```bash
 REPO=~/agent-status-lights
-git clone https://github.com/royzjq/agent-status-lights "$REPO"
+git clone https://github.com/RainGiving/agent-status-lights "$REPO"
 cd "$REPO"
 ```
 
