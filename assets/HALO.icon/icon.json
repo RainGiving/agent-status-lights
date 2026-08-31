@@ -10,8 +10,8 @@
     {
       "layers": [
         {
-          "image-name": "ring.svg",
-          "name": "Ring"
+          "image-name": "comet.png",
+          "name": "Comet"
         }
       ],
       "shadow": {
@@ -21,7 +21,7 @@
       "specular": true,
       "translucency": {
         "enabled": true,
-        "value": 0.35
+        "value": 0.5
       },
       "glass": true
     }
