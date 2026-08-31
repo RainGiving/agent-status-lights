@@ -14,6 +14,25 @@ public struct VoiceStatus: Codable, Sendable {
     }
 }
 
+/// The LED-bit sender's account of the wireless path: whether it runs, what
+/// interfaces it reaches, and how far a config sync has come.
+public struct WirelessStatus: Codable, Sendable {
+    public let sender: String?
+    public let inputMonitoring: String?
+    public let devices: Int?
+    public let transports: String?
+    public let syncing: Bool?
+    public let syncProgress: Int?
+    public let slotsPushed: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case sender, devices, transports, syncing
+        case inputMonitoring = "input_monitoring"
+        case syncProgress = "sync_progress"
+        case slotsPushed = "slots_pushed"
+    }
+}
+
 public struct DaemonStatus: Codable, Sendable {
     public let ok: Bool
     public let version: String?
@@ -22,11 +41,15 @@ public struct DaemonStatus: Codable, Sendable {
     public let sessionsByState: [String: Int]?
     public let previewing: Bool?
     public let haloSupported: Bool?
+    /// "usb" when VIA answered just now, "bluetooth" when only the LED-bit
+    /// channel carries the state, "none" when neither path reaches a keyboard.
+    public let transport: String?
+    public let wireless: WirelessStatus?
     public let voice: VoiceStatus?
     public let error: String?
 
     enum CodingKeys: String, CodingKey {
-        case ok, version, state, sessions, previewing, error, voice
+        case ok, version, state, sessions, previewing, error, voice, transport, wireless
         case sessionsByState = "sessions_by_state"
         case haloSupported = "halo_supported"
     }

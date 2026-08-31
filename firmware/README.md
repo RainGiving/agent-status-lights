@@ -5,13 +5,17 @@ to NuPhy's own Halo65 V2 firmware. Stock firmware exposes the ring only through
 `Fn + M` keycodes; nothing in VIA can reach it (a sweep of `id_custom_get_value`
 across all 256 channels answers on `0x03`, the standard RGB Matrix, alone).
 
-The patch adds 532 bytes and touches three files:
+The patch adds ~1.8 KB and touches these files:
 
 | File | Change |
 | --- | --- |
-| `ansi.h` | `halo_host_t` and the `HALO_HOST_*` mode enum |
-| `side.c` | The animation primitives, plus an intercept at the top of `m_side_led_show()` |
-| `ansi.c` | `via_custom_value_command_kb()` on vendor channel `0x10` |
+| `ansi.h` | `halo_host_t`, the `HALO_HOST_*` mode enum, state slots in `user_config_t` |
+| `side.c` | Animation primitives, the `m_side_led_show()` intercept, slot rendering (ring + matrix) |
+| `ansi.c` | `via_custom_value_command_kb()` on vendor channel `0x10` (animation + state slots), slot init |
+| `halo_link.[ch]` | **New**: decoder for the wireless status link — pure protocol, host-testable |
+| `rf.c` | Feeds each `CMD_RF_STS_SYSC` LED byte to the decoder; adaptive 200/50 ms sync interval |
+| `config.h` | `EECONFIG_USER_DATA_SIZE` 12 → 96 for the six 14-byte state slots |
+| `rules.mk` | `SRC += halo_link.c` |
 
 The firmware implements primitives only. Colour, speed, tail length and
 brightness all arrive over VIA at runtime, so retuning the look never needs a
@@ -28,9 +32,16 @@ EEPROM.
  +------------ id_custom_set_value
 ```
 
-`0x08` in place of `0x07` reads the current animation back. `0x09` (save) is
-accepted as a no-op: the ring is a transient display, so persisting it would
-only mean booting into the last task's colour.
+`0x08` in place of `0x07` reads the current animation back. The live
+animation is never persisted — the ring is a transient display, and booting
+into the last task's colour would help nobody.
+
+Value id `0x02` is the per-state slot table for wireless operation
+(`[state 0-5, 14 slot bytes]`, set/get), and `0x09` (save) commits the slots
+to EEPROM. Over Bluetooth the host can only send 2-bit state numbers through
+the keyboard-LED report; the firmware then renders from these slots. Wire
+format, timings and the config-frame encoding are in
+[`docs/PROTOCOL.md`](../docs/PROTOCOL.md).
 
 | mode | Name | `param` |
 | --- | --- | --- |

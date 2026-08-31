@@ -1,8 +1,22 @@
 diff --git a/keyboards/nuphy/halo65_v2/ansi/ansi.c b/keyboards/nuphy/halo65_v2/ansi/ansi.c
-index ffed3ec..f3a4c42 100644
+index ffed3ec..bf58418 100644
 --- a/keyboards/nuphy/halo65_v2/ansi/ansi.c
 +++ b/keyboards/nuphy/halo65_v2/ansi/ansi.c
-@@ -791,3 +791,81 @@ void housekeeping_task_kb(void)
+@@ -736,6 +736,13 @@ void m_londing_eeprom_data(void)
+         side_rgb    = user_config.ee_side_rgb;
+         side_colour = user_config.ee_side_colour;
+     }
++    /* Status-link slots ride in the same datablock but have their own magic:
++     * a wiped or pre-slot EEPROM re-inits them without touching NuPhy's own
++     * fields above. */
++    if (user_config.halo_slot_magic != HALO_LINK_SLOT_MAGIC) {
++        halo_link_slots_default();
++        eeconfig_update_user_datablock(&user_config);
++    }
+ }
+ 
+ 
+@@ -791,3 +798,141 @@ void housekeeping_task_kb(void)
      Sleep_Handle();
  
  }
@@ -25,23 +39,17 @@ index ffed3ec..f3a4c42 100644
 +};
 +
 +enum {
-+    id_halo_animation = 0x01,
++    id_halo_animation  = 0x01,
++    id_halo_state_slot = 0x02,
 +};
 +
 +#    define HALO_PAYLOAD_LEN 7
 +
-+void via_custom_value_command_kb(uint8_t *data, uint8_t length) {
-+    // data = [ command_id, channel_id, value_id, value_data ]
-+    uint8_t *command_id = &(data[0]);
-+    uint8_t *channel_id = &(data[1]);
-+    uint8_t *value_id   = &(data[2]);
-+    uint8_t *value_data = &(data[3]);
++/* Slot writes land in RAM and are committed by id_custom_save, so the daemon
++ * can stream all six states and pay for one EEPROM update. */
++static bool halo_slots_dirty = false;
 +
-+    if (*channel_id != id_halo_channel || *value_id != id_halo_animation) {
-+        *command_id = id_unhandled;
-+        return;
-+    }
-+
++static void halo_animation_command(uint8_t *command_id, uint8_t *value_data, uint8_t length) {
 +    switch (*command_id) {
 +        case id_custom_set_value: {
 +            if (length < 3 + HALO_PAYLOAD_LEN || value_data[0] >= HALO_HOST_MODE_COUNT) {
@@ -73,9 +81,13 @@ index ffed3ec..f3a4c42 100644
 +        }
 +
 +        case id_custom_save:
-+            /* The ring is a transient status display. Persisting it to EEPROM
-+             * would mean booting into whatever the last task's colour was, and
-+             * would wear the cell for no benefit, so save is a no-op. */
++            /* The live animation is a transient status display; persisting it
++             * would mean booting into whatever the last task's colour was.
++             * What save does commit is the state slots below. */
++            if (halo_slots_dirty) {
++                halo_slots_dirty = false;
++                eeconfig_update_user_datablock(&user_config);
++            }
 +            break;
 +
 +        default:
@@ -83,12 +95,93 @@ index ffed3ec..f3a4c42 100644
 +            break;
 +    }
 +}
++
++/* value_data = [ state, 14 slot bytes ] -- the wired fast path for what the
++ * wireless link can only trickle through config frames. */
++static void halo_slot_command(uint8_t *command_id, uint8_t *value_data, uint8_t length) {
++    if (length < 3 + 1 || value_data[0] >= HALO_LINK_STATE_COUNT) {
++        *command_id = id_unhandled;
++        return;
++    }
++    halo_link_slot_t *slot = &user_config.halo_slots[value_data[0]];
++
++    switch (*command_id) {
++        case id_custom_set_value:
++            if (length < 3 + 1 + HALO_LINK_SLOT_BYTES) {
++                *command_id = id_unhandled;
++                return;
++            }
++            if (memcmp(slot, &value_data[1], HALO_LINK_SLOT_BYTES) != 0) {
++                memcpy(slot, &value_data[1], HALO_LINK_SLOT_BYTES);
++                halo_slots_dirty = true;
++            }
++            break;
++
++        case id_custom_get_value:
++            memcpy(&value_data[1], slot, HALO_LINK_SLOT_BYTES);
++            break;
++
++        case id_custom_save:
++            if (halo_slots_dirty) {
++                halo_slots_dirty = false;
++                eeconfig_update_user_datablock(&user_config);
++            }
++            break;
++
++        default:
++            *command_id = id_unhandled;
++            break;
++    }
++}
++
++void via_custom_value_command_kb(uint8_t *data, uint8_t length) {
++    // data = [ command_id, channel_id, value_id, value_data ]
++    uint8_t *command_id = &(data[0]);
++    uint8_t *channel_id = &(data[1]);
++    uint8_t *value_id   = &(data[2]);
++    uint8_t *value_data = &(data[3]);
++
++    if (*channel_id != id_halo_channel) {
++        *command_id = id_unhandled;
++        return;
++    }
++    switch (*value_id) {
++        case id_halo_animation:
++            halo_animation_command(command_id, value_data, length);
++            break;
++        case id_halo_state_slot:
++            halo_slot_command(command_id, value_data, length);
++            break;
++        default:
++            *command_id = id_unhandled;
++            break;
++    }
++}
 +#endif
 diff --git a/keyboards/nuphy/halo65_v2/ansi/ansi.h b/keyboards/nuphy/halo65_v2/ansi/ansi.h
-index 3137fc7..3f8e64c 100644
+index 3137fc7..b2ec0dd 100644
 --- a/keyboards/nuphy/halo65_v2/ansi/ansi.h
 +++ b/keyboards/nuphy/halo65_v2/ansi/ansi.h
-@@ -203,4 +203,34 @@ typedef struct
+@@ -190,6 +190,8 @@ typedef struct
+     uint8_t bit7: 1;
+ }m_8bit;
+ 
++#include "halo_link.h"
++
+ typedef struct
+ {
+     uint8_t default_brightness_flag;
+@@ -200,7 +202,45 @@ typedef struct
+     uint8_t ee_side_rgb;
+     uint8_t ee_side_colour;
+     m_8bit ee_dev_config;
++    /* Per-state looks for the status link (see halo_link.h). Living inside
++     * user_config keeps them in the same EEPROM datablock NuPhy already
++     * maintains; changing EECONFIG_USER_DATA_SIZE re-versions the block, so
++     * old data reads back invalid and the magic byte below triggers a
++     * re-init from the compiled defaults. */
++    uint8_t          halo_slot_magic; /* HALO_LINK_SLOT_MAGIC when valid */
++    halo_link_slot_t halo_slots[HALO_LINK_STATE_COUNT];
  } user_config_t;
  
  extern user_config_t user_config;
@@ -122,13 +215,444 @@ index 3137fc7..3f8e64c 100644
 +
 +extern halo_host_t halo_host;
 +void halo_host_set(const halo_host_t *cfg);
++void halo_link_slots_default(void);
  #define f_dev_sleep_enable  user_config.ee_dev_config.bit0
 \ No newline at end of file
+diff --git a/keyboards/nuphy/halo65_v2/ansi/config.h b/keyboards/nuphy/halo65_v2/ansi/config.h
+index 5993965..a554f37 100644
+--- a/keyboards/nuphy/halo65_v2/ansi/config.h
++++ b/keyboards/nuphy/halo65_v2/ansi/config.h
+@@ -20,8 +20,12 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ 
+ #define TAP_CODE_DELAY              8
+ #define DYNAMIC_KEYMAP_MACRO_DELAY  8
+-// This is the size of the EEPROM for the custom VIA-specific data
+-#define EECONFIG_USER_DATA_SIZE     12
++// This is the size of the EEPROM for the custom VIA-specific data.
++// 12 covered NuPhy's own 8-byte user_config_t; the status-link state slots
++// (1 magic byte + 6 states x 14 bytes, see halo_link.h) raise the need to 93.
++// The size doubles as the datablock's version stamp, so old blocks read back
++// invalid and re-init from defaults after a flash.
++#define EECONFIG_USER_DATA_SIZE     96
+ 
+ #define DEV_MODE_PIN                C0
+ #define SYS_MODE_PIN                C1
+diff --git a/keyboards/nuphy/halo65_v2/ansi/halo_link.c b/keyboards/nuphy/halo65_v2/ansi/halo_link.c
+new file mode 100644
+index 0000000..c0d050d
+--- /dev/null
++++ b/keyboards/nuphy/halo65_v2/ansi/halo_link.c
+@@ -0,0 +1,246 @@
++// Copyright 2026 agent-status-lights
++// SPDX-License-Identifier: GPL-2.0-or-later
++/* Decoder for the wireless status link -- protocol only, no hardware access,
++ * so the whole state machine can be compiled and exercised on the host.
++ * See halo_link.h for the wire format. */
++#include "halo_link.h"
++#include <string.h>
++
++#define FRAME_MAX_PAYLOAD 7
++#define FRAME_MAX_BYTES   (1 + FRAME_MAX_PAYLOAD + 1)
++
++static struct {
++    bool     started;
++    uint8_t  raw;        /* last raw LED byte, caps bit included */
++    uint8_t  sym;        /* last accepted 2-bit data symbol */
++    uint32_t wipe_until; /* ignore 00 until then (OS rewrote the report) */
++    uint8_t  shown;
++    bool     esc;        /* escape prefix seen, operand outstanding */
++    uint32_t esc_at;
++    bool     zero_wait;  /* 00 seen; idle only once it outlives a wipe */
++    uint32_t zero_at;
++    bool     config;
++    uint32_t cfg_at;     /* last wire transition while in config mode */
++    uint8_t  tri_first;  /* first trit of a pending pair, 0xff = none */
++    uint8_t  frame[FRAME_MAX_BYTES];
++    uint8_t  nbits;
++    uint8_t  expect;     /* total frame bytes once the header is in, else 0 */
++    bool     bad;        /* current frame corrupt; wait for the inter-rep gap */
++    uint8_t  prev[FRAME_MAX_BYTES]; /* last CRC-clean frame, for the 2-match rule */
++    uint8_t  prev_len;
++} lk = {.shown = HALO_LINK_IDLE, .tri_first = 0xff};
++
++static bool before(uint32_t now, uint32_t deadline) {
++    return (int32_t)(now - deadline) < 0;
++}
++
++static uint8_t crc8(const uint8_t *p, uint8_t n) {
++    uint8_t crc = 0;
++    while (n--) {
++        crc ^= *p++;
++        for (uint8_t i = 0; i < 8; i++) {
++            crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x07) : (uint8_t)(crc << 1);
++        }
++    }
++    return crc;
++}
++
++static uint8_t payload_len(uint8_t field) {
++    switch (field) {
++        case HALO_LINK_FIELD_RING_COLOR:  return 3;
++        case HALO_LINK_FIELD_RING_PARAMS: return 4;
++        case HALO_LINK_FIELD_MATRIX:      return 7;
++        default:                          return 0;
++    }
++}
++
++static void show(uint8_t state) {
++    if (state == lk.shown) return;
++    lk.shown = state;
++    halo_link_render(state);
++}
++
++static void frame_restart(void) {
++    lk.nbits     = 0;
++    lk.expect    = 0;
++    lk.bad       = false;
++    lk.tri_first = 0xff;
++}
++
++static void frame_complete(void) {
++    if (crc8(lk.frame, (uint8_t)(lk.expect - 1)) == lk.frame[lk.expect - 1]) {
++        if (lk.prev_len == lk.expect && memcmp(lk.prev, lk.frame, lk.expect) == 0) {
++            /* Second identical CRC-clean copy: only now is it believed. */
++            halo_link_store((uint8_t)(lk.frame[0] & 0x0f), (uint8_t)(lk.frame[0] >> 4),
++                            &lk.frame[1]);
++        } else {
++            memcpy(lk.prev, lk.frame, lk.expect);
++            lk.prev_len = lk.expect;
++        }
++    }
++    frame_restart();
++}
++
++static void config_push(uint8_t trit, uint32_t now) {
++    lk.cfg_at = now;
++    if (lk.bad) return;
++    if (lk.tri_first == 0xff) {
++        lk.tri_first = trit;
++        return;
++    }
++    uint8_t group = (uint8_t)(lk.tri_first * 3 + trit);
++    lk.tri_first  = 0xff;
++    if (group > 7) { /* trit pair value 8: not produced by the encoder */
++        lk.bad = true;
++        return;
++    }
++    for (int8_t i = 2; i >= 0; i--) {
++        uint8_t byte = (uint8_t)(lk.nbits >> 3);
++        if (byte >= FRAME_MAX_BYTES) {
++            lk.bad = true;
++            return;
++        }
++        if ((lk.nbits & 7) == 0) lk.frame[byte] = 0;
++        lk.frame[byte] |= (uint8_t)(((group >> i) & 1) << (7 - (lk.nbits & 7)));
++        lk.nbits++;
++        if (lk.nbits == 8) {
++            uint8_t plen = payload_len((uint8_t)(lk.frame[0] >> 4));
++            if (plen == 0 || (lk.frame[0] & 0x0f) >= HALO_LINK_STATE_COUNT) {
++                lk.bad = true;
++                return;
++            }
++            lk.expect = (uint8_t)(1 + plen + 1);
++        }
++        if (lk.expect && lk.nbits >= (uint8_t)(lk.expect * 8)) {
++            /* Anything left in this group is the sender's 3-bit padding. */
++            frame_complete();
++            return;
++        }
++    }
++}
++
++static void config_enter(uint32_t now) {
++    lk.config    = true;
++    lk.esc       = false;
++    lk.zero_wait = false;
++    lk.cfg_at    = now;
++    lk.prev_len  = 0;
++    frame_restart();
++}
++
++/* Leaving config mode re-latches whatever the sender parked on the wire: a
++ * direct symbol shows at once, 11 re-arms the escape so the resumed re-assert
++ * cycle lands on the right escaped state, and 00 goes through the usual idle
++ * confirmation. Without this a park value that happens to equal the next
++ * status symbol would never produce an edge and the display would stick. */
++static void config_exit(uint32_t now) {
++    lk.config = false;
++    frame_restart();
++    switch (lk.sym) {
++        case 3:  lk.esc = true; lk.esc_at = now; break;
++        case 1:  show(HALO_LINK_RUNNING); break;
++        case 2:  show(HALO_LINK_PERMISSION); break;
++        default:
++            if (lk.shown != HALO_LINK_IDLE) {
++                lk.zero_wait = true;
++                lk.zero_at   = now;
++            }
++            break;
++    }
++}
++
++uint8_t halo_link_shown(void) {
++    return lk.shown;
++}
++
++void halo_link_reset(void) {
++    /* Bookkeeping only. The display is deliberately left as it is: on a
++     * switch to USB the VIA path takes over from the same halo_host state,
++     * and blanking here would fight it. */
++    uint8_t shown = lk.shown;
++    memset(&lk, 0, sizeof(lk));
++    lk.shown     = shown;
++    lk.tri_first = 0xff;
++}
++
++void halo_link_sample(uint8_t leds, uint32_t now) {
++    uint8_t raw  = (uint8_t)(leds & 0x07);
++    uint8_t data = (uint8_t)((raw & 1) | ((raw >> 1) & 2));
++
++    if (!lk.started) {
++        /* The wire may already be mid-assertion when sampling begins (RF
++         * reconnect, decoder reset), so the first sample is decoded, not just
++         * latched -- a steady direct state would otherwise never render. */
++        lk.started = true;
++        lk.raw     = raw;
++        lk.sym     = data;
++        if (data == 3) {
++            lk.esc    = true;
++            lk.esc_at = now;
++        } else if (data == 1) {
++            show(HALO_LINK_RUNNING);
++        } else if (data == 2) {
++            show(HALO_LINK_PERMISSION);
++        }
++        return;
++    }
++
++    bool caps_edge = ((raw ^ lk.raw) & 0x02) != 0;
++    lk.raw         = raw;
++
++    /* macOS rewrites the whole LED report when Caps Lock toggles, wiping both
++     * data bits to 00 until the sender's next refresh. The wipe arrives on a
++     * caps edge; ignore 00 for a window that outlives the refresh period. */
++    if (data == 0 && lk.sym != 0) {
++        if (caps_edge) lk.wipe_until = now + HALO_LINK_WIPE_GUARD_MS;
++        if (before(now, lk.wipe_until)) return;
++    }
++
++    if (data == lk.sym) { /* steady wire: timeouts only */
++        if (lk.config) {
++            if (!before(now, lk.cfg_at + HALO_LINK_EXIT_MS)) {
++                config_exit(now);
++            } else if (!before(now, lk.cfg_at + HALO_LINK_FRAME_GAP_MS)) {
++                frame_restart(); /* inter-rep gap: drop any partial frame */
++            }
++            return;
++        }
++        if (lk.esc && data == 3 && !before(now, lk.esc_at + HALO_LINK_ENTRY_MS)) {
++            config_enter(now);
++            return;
++        }
++        if (lk.zero_wait && data == 0 && !before(now, lk.zero_at + HALO_LINK_ZERO_CONFIRM_MS)) {
++            lk.zero_wait = false;
++            show(HALO_LINK_IDLE);
++        }
++        return;
++    }
++
++    uint8_t prev = lk.sym;
++    lk.sym       = data;
++
++    if (lk.config) {
++        /* data != prev, so the trit is 0-2 by construction. */
++        config_push((uint8_t)((data - prev - 1) & 3), now);
++        return;
++    }
++
++    lk.zero_wait = false;
++    if (data == 3) {
++        lk.esc    = true;
++        lk.esc_at = now;
++        return;
++    }
++    if (lk.esc) {
++        lk.esc = false;
++        show(data == 1 ? HALO_LINK_FAILURE
++                       : data == 2 ? HALO_LINK_COMPLETED : HALO_LINK_VOICE);
++        return;
++    }
++    if (data == 0) {
++        lk.zero_wait = true;
++        lk.zero_at   = now;
++        return;
++    }
++    show(data == 1 ? HALO_LINK_RUNNING : HALO_LINK_PERMISSION);
++}
+diff --git a/keyboards/nuphy/halo65_v2/ansi/halo_link.h b/keyboards/nuphy/halo65_v2/ansi/halo_link.h
+new file mode 100644
+index 0000000..887d880
+--- /dev/null
++++ b/keyboards/nuphy/halo65_v2/ansi/halo_link.h
+@@ -0,0 +1,86 @@
++// Copyright 2026 agent-status-lights
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++#include <stdint.h>
++#include <stdbool.h>
++
++/* Wireless status link.
++ *
++ * Over Bluetooth and 2.4G the host cannot reach VIA; the only byte it can push
++ * is the standard HID keyboard LED report, and NuPhy's RF module forwards its
++ * low three bits over CMD_RF_STS_SYSC. Caps Lock belongs to the OS, which
++ * rewrites the whole byte on every toggle, so the usable payload is NumLock
++ * (bit 0) and ScrollLock (bit 2): one 2-bit symbol per sample.
++ *
++ * Status symbols: 00 idle, 01 running, 10 permission. 11 is an escape prefix;
++ * the following symbol selects 01 failure, 10 completed, 00 voice. Escaped
++ * states are re-asserted as a repeating 11/operand cycle, direct states as a
++ * periodic rewrite of the same value, so a state survives the OS overwriting
++ * the report.
++ *
++ * Holding 11 for HALO_LINK_ENTRY_MS switches the decoder into config mode,
++ * where every wire transition carries one base-3 digit: the sender always
++ * moves the wire, next = (prev + 1 + trit) mod 4, which is what makes the
++ * stream self-clocking -- no shared timing is needed, only edges. Two trits
++ * form one 3-bit group (values 0-7; 8 marks a corrupt pair), groups form
++ * frames of [header, payload, crc8], and a frame is applied only after two
++ * CRC-clean receptions with identical bytes. See docs/PROTOCOL.md in
++ * agent-status-lights for the host side and the measured timings. */
++
++enum halo_link_state {
++    HALO_LINK_IDLE = 0,
++    HALO_LINK_RUNNING,
++    HALO_LINK_PERMISSION,
++    HALO_LINK_FAILURE,
++    HALO_LINK_COMPLETED,
++    HALO_LINK_VOICE,
++    HALO_LINK_STATE_COUNT,
++};
++
++/* Config-frame header: low nibble = state id, high nibble = field id. */
++enum halo_link_field {
++    HALO_LINK_FIELD_RING_COLOR = 0, /* payload: r g b */
++    HALO_LINK_FIELD_RING_PARAMS,    /* payload: mode speed param bright */
++    HALO_LINK_FIELD_MATRIX,         /* payload: effect speed flags h s v scale */
++};
++
++/* One state's complete look, kept in user_config so it persists in EEPROM.
++ * The USB path writes it in one VIA report (channel 0x10, value id 0x02);
++ * the wireless path updates single fields through config frames. */
++typedef struct {
++    uint8_t ring_mode;        /* halo_host_mode; RELEASE leaves the ring alone */
++    uint8_t ring_r, ring_g, ring_b;
++    uint8_t ring_speed;
++    uint8_t ring_param;
++    uint8_t ring_bright;
++    uint8_t mx_effect;        /* 0 = leave the typing matrix alone */
++    uint8_t mx_speed;
++    uint8_t mx_flags;         /* bit 0: colour follows ring_r/g/b */
++    uint8_t mx_h, mx_s, mx_v; /* explicit HSV when the follow bit is clear */
++    uint8_t mx_scale;         /* value ceiling in percent when following */
++} halo_link_slot_t;
++
++#define HALO_LINK_SLOT_BYTES 14
++_Static_assert(sizeof(halo_link_slot_t) == HALO_LINK_SLOT_BYTES,
++               "slot layout is wire format and EEPROM format at once");
++
++#define HALO_LINK_SLOT_MAGIC 0x5A
++
++/* Decoder thresholds, all in ms. The sender's timings sit above each one:
++ * refresh 150 < wipe guard 300; escape phase 250 < entry 800; inter-rep gap
++ * 450 > frame gap 300 but < exit 700; park hold 900 > exit 700. */
++#define HALO_LINK_WIPE_GUARD_MS   300
++#define HALO_LINK_ZERO_CONFIRM_MS 300
++#define HALO_LINK_ENTRY_MS        800
++#define HALO_LINK_FRAME_GAP_MS    300
++#define HALO_LINK_EXIT_MS         700
++
++/* Feed one sampled LED byte (low 3 bits meaningful). `now` is timer_read32()
++ * at the sample, passed in so the decoder stays testable off-target. */
++void    halo_link_sample(uint8_t leds, uint32_t now);
++void    halo_link_reset(void);
++uint8_t halo_link_shown(void);
++
++/* Provided by side.c: everything that touches actual hardware or EEPROM. */
++extern void halo_link_render(uint8_t state);
++extern void halo_link_store(uint8_t state, uint8_t field, const uint8_t *payload);
+diff --git a/keyboards/nuphy/halo65_v2/ansi/rf.c b/keyboards/nuphy/halo65_v2/ansi/rf.c
+index 8aeac76..2a636ea 100644
+--- a/keyboards/nuphy/halo65_v2/ansi/rf.c
++++ b/keyboards/nuphy/halo65_v2/ansi/rf.c
+@@ -33,6 +33,10 @@ extern bool f_rf_reset;
+ extern bool f_rf_hand_ok;
+ extern bool f_goto_sleep;
+ 
++/* Last time the host's LED bits changed; dev_sts_sync() polls fast while
++ * this is fresh so status-link symbols are picked up promptly. */
++static uint32_t rf_led_activity_timer = 0;
++
+ uint8_t  uart_bit_report_buf[32] = {0};
+ uint8_t  func_tab[32]            = {0};
+ uint8_t  bitkb_report_buf[32]    = {0};
+@@ -256,7 +260,17 @@ void RF_Protocol_Receive(void) {
+                     dev_info.rf_state = Usart_Mgr.RXDBuf[5];
+ 
+                     if ((dev_info.rf_state == RF_CONNECT) && ((Usart_Mgr.RXDBuf[6] & 0xf8) == 0)) {
++                        /* The host's LED bits double as the wireless status
++                         * link. Every valid report is one decoder sample --
++                         * unchanged bytes drive its timeouts -- and a change
++                         * drops dev_sts_sync() to its fast interval. */
++                        if (dev_info.rf_led != Usart_Mgr.RXDBuf[6]) {
++                            rf_led_activity_timer = timer_read32();
++                        }
+                         dev_info.rf_led = Usart_Mgr.RXDBuf[6];
++                        if (dev_info.link_mode != LINK_USB) {
++                            halo_link_sample(dev_info.rf_led, timer_read32());
++                        }
+                     }
+ 
+                     dev_info.rf_charge = Usart_Mgr.RXDBuf[7];
+@@ -474,7 +488,13 @@ void dev_sts_sync(void) {
+     static uint32_t interval_timer  = 0;
+     static uint8_t  link_state_temp = RF_DISCONNECT;
+ 
+-    if (timer_elapsed32(interval_timer) < 200)
++    /* Adaptive polling for the status link: a change in the host's LED bits
++     * drops the sync interval from 200 ms to 50 ms so symbol sequences read
++     * quickly, and a 2-second watchdog with no new symbol restores 200 ms.
++     * Each sync costs ~2 ms (1 ms delay + up to 1 ms waiting for the ack),
++     * so the fast interval spends about 4% of the main loop. */
++    uint32_t interval = (timer_elapsed32(rf_led_activity_timer) < 2000) ? 50 : 200;
++    if (timer_elapsed32(interval_timer) < interval)
+         return;
+     else
+         interval_timer = timer_read32();
+@@ -497,6 +517,9 @@ void dev_sts_sync(void) {
+             host_mode = HOST_USB_TYPE;
+             host_set_driver(m_host_driver);
+             m_break_all_key();
++            /* The VIA path owns the lights over USB; drop the wireless
++             * decoder's bookkeeping but leave the display for VIA to update. */
++            halo_link_reset();
+         }
+         rf_blink_cnt = 0;
+     }
+diff --git a/keyboards/nuphy/halo65_v2/ansi/rules.mk b/keyboards/nuphy/halo65_v2/ansi/rules.mk
+index f34d2ee..2aa65f7 100644
+--- a/keyboards/nuphy/halo65_v2/ansi/rules.mk
++++ b/keyboards/nuphy/halo65_v2/ansi/rules.mk
+@@ -1,3 +1,3 @@
+-SRC += side.c rf.c sleep.c rf_driver.c
++SRC += side.c rf.c sleep.c rf_driver.c halo_link.c
+ UART_DRIVER_REQUIRED   = yes
+ RGB_MATRIX_CUSTOM_USER = yes
 diff --git a/keyboards/nuphy/halo65_v2/ansi/side.c b/keyboards/nuphy/halo65_v2/ansi/side.c
-index f381029..38d6dd4 100644
+index f381029..b31eadb 100644
 --- a/keyboards/nuphy/halo65_v2/ansi/side.c
 +++ b/keyboards/nuphy/halo65_v2/ansi/side.c
-@@ -1101,6 +1101,94 @@ void rgb_test_show(void)
+@@ -1101,6 +1101,220 @@ void rgb_test_show(void)
  /**
   * @brief  side_led_show.
   */
@@ -220,10 +744,136 @@ index f381029..38d6dd4 100644
 +    }
 +}
 +
++/* ---------------------------------------------------------------------------
++ * Wireless status link -- hardware side of halo_link.c.
++ *
++ * The decoder hands over a state id; this maps it through the per-state slots
++ * kept in user_config (written over VIA when wired, updated field-by-field by
++ * config frames when wireless) onto the same primitives the USB path drives.
++ * ------------------------------------------------------------------------ */
++
++/* Compiled fallback, used until the daemon's first sync. Mirrors the
++ * DEFAULT_SETTINGS table in claude_halo65_daemon.py. */
++static const halo_link_slot_t halo_slot_defaults[HALO_LINK_STATE_COUNT] = {
++    [HALO_LINK_IDLE]       = {.ring_mode = HALO_HOST_RELEASE},
++    [HALO_LINK_RUNNING]    = {HALO_HOST_COMET,  0x00, 0xA8, 0xFF, 200, 12, 255, 5, 110, 1, 0, 0, 0, 60},
++    [HALO_LINK_PERMISSION] = {HALO_HOST_PULSE,  0xFF, 0xB0, 0x00, 215, 0,  255, 5, 230, 1, 0, 0, 0, 75},
++    [HALO_LINK_FAILURE]    = {HALO_HOST_STROBE, 0xFF, 0x20, 0x20, 230, 50, 255, 1, 128, 1, 0, 0, 0, 75},
++    [HALO_LINK_COMPLETED]  = {HALO_HOST_FILL,   0x00, 0xE0, 0x60, 215, 0,  255, 1, 128, 1, 0, 0, 0, 60},
++    [HALO_LINK_VOICE]      = {HALO_HOST_SOLID,  0xA8, 0x55, 0xF7, 128, 0,  255, 1, 128, 1, 0, 0, 0, 75},
++};
++
++static bool halo_link_mx_override = false;
++
++void halo_link_slots_default(void)
++{
++    memcpy(user_config.halo_slots, halo_slot_defaults, sizeof(halo_slot_defaults));
++    user_config.halo_slot_magic = HALO_LINK_SLOT_MAGIC;
++}
++
++/* Integer RGB -> QMK hue/sat, matching the daemon's hex_to_hsv to within one
++ * step. Only the follow-colour path needs it. */
++static void halo_link_rgb_to_hs(uint8_t r, uint8_t g, uint8_t b, uint8_t *h_out, uint8_t *s_out)
++{
++    uint8_t hi = r > g ? (r > b ? r : b) : (g > b ? g : b);
++    uint8_t lo = r < g ? (r < b ? r : b) : (g < b ? g : b);
++    uint8_t d  = (uint8_t)(hi - lo);
++    if (d == 0 || hi == 0) {
++        *h_out = 0;
++        *s_out = 0;
++        return;
++    }
++    *s_out = (uint8_t)(((uint16_t)d * 255) / hi);
++    int32_t h; /* hue on a 0..1535 wheel: 256 units per sextant */
++    if (hi == r)      h = ((int32_t)g - b) * 256 / d;
++    else if (hi == g) h = 512 + ((int32_t)b - r) * 256 / d;
++    else              h = 1024 + ((int32_t)r - g) * 256 / d;
++    if (h < 0) h += 1536;
++    *h_out = (uint8_t)(h * 256 / 1536);
++}
++
++void halo_link_render(uint8_t state)
++{
++    if (state >= HALO_LINK_STATE_COUNT) return;
++    const halo_link_slot_t *s = &user_config.halo_slots[state];
++
++    halo_host_t cfg = {
++        .mode   = s->ring_mode < HALO_HOST_MODE_COUNT ? s->ring_mode : HALO_HOST_RELEASE,
++        .r      = s->ring_r,
++        .g      = s->ring_g,
++        .b      = s->ring_b,
++        .speed  = s->ring_speed,
++        .param  = s->ring_param,
++        .bright = s->ring_bright,
++    };
++    halo_host_set(&cfg);
++
++    /* effect 0 means "leave the typing matrix alone"; an out-of-range value
++     * from a stale EEPROM is treated the same way rather than asserted on. */
++    if (s->mx_effect == 0 || s->mx_effect >= RGB_MATRIX_EFFECT_MAX) {
++        if (halo_link_mx_override) {
++            halo_link_mx_override = false;
++            rgb_matrix_reload_from_eeprom();
++        }
++        return;
++    }
++    uint8_t h, sat, v;
++    if (s->mx_flags & 0x01) {
++        halo_link_rgb_to_hs(s->ring_r, s->ring_g, s->ring_b, &h, &sat);
++        uint8_t hi    = s->ring_r > s->ring_g ? (s->ring_r > s->ring_b ? s->ring_r : s->ring_b)
++                                              : (s->ring_g > s->ring_b ? s->ring_g : s->ring_b);
++        uint8_t scale = s->mx_scale > 100 ? 100 : s->mx_scale;
++        v             = (uint8_t)(((uint16_t)hi * scale) / 100);
++    } else {
++        h   = s->mx_h;
++        sat = s->mx_s;
++        v   = s->mx_v;
++    }
++    halo_link_mx_override = true;
++    rgb_matrix_mode_noeeprom(s->mx_effect);
++    rgb_matrix_sethsv_noeeprom(h, sat, v);
++    rgb_matrix_set_speed_noeeprom(s->mx_speed);
++}
++
++void halo_link_store(uint8_t state, uint8_t field, const uint8_t *p)
++{
++    if (state >= HALO_LINK_STATE_COUNT) return;
++    halo_link_slot_t *s      = &user_config.halo_slots[state];
++    halo_link_slot_t  before = *s;
++    switch (field) {
++        case HALO_LINK_FIELD_RING_COLOR:
++            s->ring_r = p[0];
++            s->ring_g = p[1];
++            s->ring_b = p[2];
++            break;
++        case HALO_LINK_FIELD_RING_PARAMS:
++            s->ring_mode   = p[0];
++            s->ring_speed  = p[1];
++            s->ring_param  = p[2];
++            s->ring_bright = p[3];
++            break;
++        case HALO_LINK_FIELD_MATRIX:
++            s->mx_effect = p[0];
++            s->mx_speed  = p[1];
++            s->mx_flags  = p[2];
++            s->mx_h      = p[3];
++            s->mx_s      = p[4];
++            s->mx_v      = p[5];
++            s->mx_scale  = p[6];
++            break;
++        default:
++            return;
++    }
++    if (memcmp(&before, s, sizeof(*s)) != 0) {
++        eeconfig_update_user_datablock(&user_config);
++    }
++    if (halo_link_shown() == state) halo_link_render(state);
++}
++
  void m_side_led_show(void)
  {
      static bool flag_power_on         = 1;
-@@ -1119,6 +1207,19 @@ void m_side_led_show(void)
+@@ -1119,6 +1333,19 @@ void m_side_led_show(void)
         return;
      }
  

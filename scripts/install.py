@@ -44,6 +44,13 @@ LABEL = "com.claudehalo65.daemon"
 VOICE_LABEL = "com.claudehalo65.voice"
 VOICE_AGENT = Path.home() / "Library" / "LaunchAgents" / "com.claudehalo65.voice.plist"
 
+# The LED-bit sender is a third agent for the same reason as the voice watcher:
+# writing an LED on a keyboard means opening the keyboard, which macOS gates
+# behind Input Monitoring, and that permission has to belong to a binary rather
+# than to /usr/bin/python3.
+LEDS_LABEL = "com.claudehalo65.leds"
+LEDS_AGENT = Path.home() / "Library" / "LaunchAgents" / "com.claudehalo65.leds.plist"
+
 # The marker that identifies our entries inside a settings.json that other
 # tools also write to, so uninstall removes ours and nothing else.
 HOOK_MARKER = "ClaudeHalo65"
@@ -92,6 +99,9 @@ def build():
          "-o", BUILD_DIR / "halo65_voice", SRC / "halo65_voice.c",
          "-framework", "CoreFoundation", "-framework", "ApplicationServices",
          "-framework", "CoreAudio", "-framework", "IOKit"])
+    run(["clang", "-Wall", "-Wextra", "-Werror", "-O2",
+         "-o", BUILD_DIR / "halo65_leds", SRC / "halo65_leds.c",
+         "-framework", "CoreFoundation", "-framework", "IOKit"])
     # Only the firmware path uses these, but build/ is not checked in, so a
     # fresh clone that skipped them would reach "back up the keymap before
     # DFU" with no way to do it -- the one step that must not be skipped.
@@ -100,7 +110,8 @@ def build():
              "-o", BUILD_DIR / tool, SCRIPTS / f"{tool}.c",
              "-framework", "CoreFoundation", "-framework", "IOKit"])
     print("built:", ", ".join(("halo65_ledctl", "halo65_hook", "via_scan",
-                               "halo65_voice", "via_backup", "via_restore")))
+                               "halo65_voice", "halo65_leds", "via_backup",
+                               "via_restore")))
 
 
 def hook_command():
@@ -255,6 +266,31 @@ def voice_bootstrap():
                    capture_output=True)
 
 
+def write_leds_agent():
+    LEDS_AGENT.parent.mkdir(parents=True, exist_ok=True)
+    plist = {
+        "Label": LEDS_LABEL,
+        "ProgramArguments": [str(APP_DIR / "halo65_leds")],
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        "ThrottleInterval": 300,
+        "StandardOutPath": str(APP_DIR / "leds.log"),
+        "StandardErrorPath": str(APP_DIR / "leds.log"),
+    }
+    with open(LEDS_AGENT, "wb") as handle:
+        plistlib.dump(plist, handle)
+
+
+def leds_bootout():
+    subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/{LEDS_LABEL}"],
+                   capture_output=True)
+
+
+def leds_bootstrap():
+    subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(LEDS_AGENT)],
+                   capture_output=True)
+
+
 def bootstrap():
     subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(LAUNCH_AGENT)],
                    capture_output=True)
@@ -267,16 +303,19 @@ def install():
     # finds nothing is the single most likely reason an install "does not work",
     # and it is much cheaper to say so here than to debug it afterwards.
     describe_scan(run_scan())
-    for name in ("halo65_ledctl", "halo65_hook", "via_scan", "halo65_voice"):
+    for name in ("halo65_ledctl", "halo65_hook", "via_scan", "halo65_voice",
+                 "halo65_leds"):
         shutil.copy2(BUILD_DIR / name, APP_DIR / name)
         os.chmod(APP_DIR / name, 0o755)
     # TCC records Input Monitoring against the binary's code identity, and an
     # unsigned binary has none it can hold on to. Ad-hoc signing with a fixed
     # identifier is what makes the grant survive at all -- it still has to be
     # given again after a rebuild, because the hash is part of the identity.
-    subprocess.run(["codesign", "--force", "--sign", "-",
-                    "--identifier", "com.claudehalo65.voice", str(APP_DIR / "halo65_voice")],
-                   capture_output=True)
+    for binary, identifier in (("halo65_voice", "com.claudehalo65.voice"),
+                               ("halo65_leds", "com.claudehalo65.leds")):
+        subprocess.run(["codesign", "--force", "--sign", "-",
+                        "--identifier", identifier, str(APP_DIR / binary)],
+                       capture_output=True)
     for module in ("claude_halo65_daemon.py", "orca_bridge.py"):
         shutil.copy2(SRC / module, APP_DIR / module)
     # The menu bar app shells out to this for the hook buttons; only the
@@ -297,6 +336,10 @@ def install():
     write_voice_agent()
     voice_bootstrap()
     print(f"  voice watcher -> {VOICE_AGENT}")
+    leds_bootout()
+    write_leds_agent()
+    leds_bootstrap()
+    print(f"  led sender    -> {LEDS_AGENT}")
     time.sleep(1)
     status()
     print("\nRestart Claude Code (fully quit, not just the window) to load the hooks.")
@@ -820,6 +863,26 @@ def status():
 
     print(f"voice:    {describe_voice(live)}")
 
+    # The wireless path: what the LED-bit sender says about itself.
+    leds = {}
+    try:
+        with open(APP_DIR / "leds.status", encoding="utf-8") as handle:
+            for line in handle:
+                key, _, value = line.strip().partition("=")
+                leds[key] = value
+    except OSError:
+        pass
+    if not leds:
+        print("leds:     sender never started (wireless path unavailable)")
+    elif leds.get("sender") != "running":
+        print(f"leds:     {leds.get('sender')} (input monitoring: "
+              f"{leds.get('input_monitoring', 'unknown')}) -- run 'leds' to grant")
+    else:
+        reach = leds.get("transports") or "no keyboard interface"
+        sync = f", syncing {leds.get('sync_progress')}%" if leds.get("mode") == "sync" else ""
+        print(f"leds:     running, {leds.get('devices', '0')} interface(s) [{reach}]"
+              f", state {leds.get('state', '?')}{sync}")
+
     ledctl = APP_DIR / "halo65_ledctl"
     if ledctl.exists():
         probe = subprocess.run([str(ledctl), "get"], capture_output=True, text=True)
@@ -899,6 +962,33 @@ def voice_setup():
     return 0
 
 
+def leds_setup():
+    """Print what the LED sender needs, and open the pane where it is granted."""
+    status_path = APP_DIR / "leds.status"
+    state = {}
+    try:
+        with open(status_path, encoding="utf-8") as handle:
+            for line in handle:
+                key, _, value = line.strip().partition("=")
+                state[key] = value
+    except OSError:
+        pass
+    print(f"led sender: {state.get('sender', 'never started')}"
+          f" (input monitoring: {state.get('input_monitoring', 'unknown')})")
+    if state.get("sender") == "running":
+        print("  nothing to do")
+        return 0
+    print(f"\n  the binary to allow is:\n    {APP_DIR / 'halo65_leds'}")
+    print("  opening System Settings > Privacy & Security > Input Monitoring")
+    print("  drag that path in with + , or turn its switch on if it is listed already")
+    subprocess.run(["open",
+                    "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"])
+    leds_bootout()
+    leds_bootstrap()
+    print("\n  the sender was restarted; check 'status' once the switch is on")
+    return 0
+
+
 def test_hid():
     ledctl = APP_DIR / "halo65_ledctl" if (APP_DIR / "halo65_ledctl").exists() \
         else BUILD_DIR / "halo65_ledctl"
@@ -941,6 +1031,10 @@ def send_test_event(event, session):
 
 def uninstall():
     bootout()
+    leds_bootout()
+    if LEDS_AGENT.exists():
+        LEDS_AGENT.unlink()
+        print(f"  removed {LEDS_AGENT}")
     voice_bootout()
     for agent in (LAUNCH_AGENT, VOICE_AGENT):
         if agent.exists():
@@ -974,7 +1068,7 @@ def uninstall():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("build", "install", "status", "test-hid", "uninstall",
+    for name in ("build", "install", "status", "test-hid", "uninstall", "leds",
                  "build-app", "install-app", "hooks-install", "hooks-uninstall",
                  "icon", "codex-hooks-install", "codex-hooks-uninstall", "voice"):
         sub.add_parser(name)
@@ -998,6 +1092,8 @@ def main():
     if args.command == "status":
         status()
         return 0
+    if args.command == "leds":
+        return leds_setup()
     if args.command == "test-hid":
         return test_hid()
     if args.command == "voice":

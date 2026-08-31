@@ -142,13 +142,8 @@ struct RootView: View {
                     .lineLimit(2)
             }
             Spacer()
-            if model.isDirty { Text("有未保存的修改").font(.callout).foregroundStyle(.orange) }
             Button("恢复默认") { model.restoreDefaults() }
             Button("重新读取") { model.reload() }
-            Button("保存并应用") { model.save() }
-                .keyboardShortcut("s")
-                .buttonStyle(.borderedProminent)
-                .disabled(!model.canSave)
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
         .background(.bar)
@@ -203,10 +198,21 @@ struct DeviceView: View {
                         Divider()
                         StatusDot(ok: model.daemonRunning,
                                   label: model.daemonRunning ? "后台服务运行中" : "后台服务未运行")
+                        StatusDot(ok: model.transportLine.ok, label: model.transportLine.text,
+                                  warn: model.transportLine.warn)
+                        if model.isSyncing {
+                            HStack(spacing: 8) {
+                                ProgressView(value: Double(model.syncProgress ?? 0), total: 100)
+                                    .frame(width: 140)
+                                Text("配置正在经蓝牙同步到键盘…"
+                                     + (model.syncProgress.map { " \($0)%" } ?? ""))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
                         StatusDot(ok: model.haloSupported,
                                   label: model.haloSupported
                                       ? "外圈可控（固件 VIA 通道 0x10）"
-                                      : "外圈不可控 —— 固件未包含 Halo 补丁", warn: true)
+                                      : "外圈不可控 —— 固件未包含 Halo 补丁或不在有线", warn: true)
                         StatusDot(ok: model.hooksInstalled == 7,
                                   label: "Claude Code Hooks \(model.hooksInstalled)/7",
                                   warn: model.hooksInstalled > 0)
@@ -294,6 +300,37 @@ struct StateDetailView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
+                // The menus are identical on both transports; the one honest
+                // difference is when an edit reaches the keyboard, and that
+                // has to be said, not discovered.
+                if model.isWireless {
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Label("键盘走蓝牙：改动在松手后同步，需要几秒",
+                                  systemImage: "antenna.radiowaves.left.and.right")
+                                .font(.callout)
+                            Text("状态切换仍然即时。改配置走的是每秒约 16 bit 的 LED 位通道："
+                                 + "松开滑块后，改过的字段打包发往键盘，改一种颜色约 8 秒。"
+                                 + "「在键盘上预览」显示键盘里已存的参数，同步完成前可能还是旧值。"
+                                 + "插上 USB 线则一切即时生效。")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            if model.isSyncing {
+                                HStack(spacing: 8) {
+                                    ProgressView(value: Double(model.syncProgress ?? 0), total: 100)
+                                        .frame(width: 160)
+                                    Text("同步中" + (model.syncProgress.map { " \($0)%" } ?? ""))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            } else {
+                                Label("没有待同步的改动", systemImage: "checkmark.circle")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(2)
+                    }
+                }
+
                 if key == "voice" { triggerBox() }
 
                 HStack(alignment: .top, spacing: 24) {
@@ -353,7 +390,7 @@ struct StateDetailView: View {
         case "needs input monitoring":
             return (false, true, "缺「输入监控」权限，快捷键收不到")
         case "disabled":
-            return (false, true, "监听进程认为功能是关的，保存一次即可")
+            return (false, true, "监听进程还没读到新配置，稍等一秒")
         case .some(let other):
             return (false, true, "监听进程：\(other)")
         case nil:

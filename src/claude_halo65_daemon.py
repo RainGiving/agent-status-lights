@@ -25,12 +25,24 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "ClaudeHalo65"
 SOCKET_PATH = APP_DIR / "status.sock"
 STATE_PATH = APP_DIR / "state.json"
 SETTINGS_PATH = APP_DIR / "settings.json"
+LED_STATE_PATH = APP_DIR / "led.state"
+LEDS_STATUS_PATH = APP_DIR / "leds.status"
 LEDCTL = APP_DIR / "halo65_ledctl"
 LOG_PATH = APP_DIR / "daemon.log"
 LOG_MAX_BYTES = 1024 * 1024
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 SETTINGS_VERSION = 3
+
+# Wire ids shared with halo65_leds and the firmware's halo_link.h.
+STATE_NUM = {"idle": 0, "running": 1, "permission": 2,
+             "failure": 3, "completed": 4, "voice": 5}
+HALO_MODE_NUM = {"release": 0, "solid": 1, "pulse": 2,
+                 "comet": 3, "strobe": 4, "fill": 5}
+FIELD_RING_COLOR, FIELD_RING_PARAMS, FIELD_MATRIX = 0, 1, 2
+# One wireless sync is capped so a bulk edit (restore defaults, six states at
+# once) cannot queue minutes of transfer; the rest reconciles over USB.
+WIRELESS_FRAMES_MAX = 9
 
 # Highest priority first. "idle" is the absence of any tracked session and is a
 # configurable look of its own, not just "hand everything back".
@@ -352,6 +364,131 @@ def sync_voice_conf(settings):
         log(f"could not write voice.conf: {exc}")
 
 
+def crc8(data):
+    """CRC-8, polynomial 0x07 -- the same table-free loop as the firmware."""
+    crc = 0
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x07) & 0xFF if crc & 0x80 else (crc << 1) & 0xFF
+    return crc
+
+
+def state_slot(settings, name):
+    """One state's look as the 14-byte slot the firmware stores per state.
+
+    Layout matches halo_link_slot_t: ring mode/r/g/b/speed/param/bright, then
+    matrix effect/speed/flags/h/s/v/scale. Zones are baked in here -- a
+    disabled zone becomes ring RELEASE or matrix effect 0 -- so the firmware
+    needs no zone concept of its own.
+    """
+    spec = settings["states"][name]
+    zones = settings["zones"]
+
+    halo_spec = spec["halo"]
+    if not zones.get("halo") or halo_spec["mode"] == "release":
+        ring = (0, 0, 0, 0, 0, 0, 0)
+    else:
+        r, g, b, bright = hex_to_rgb(halo_spec["color"], halo_spec["brightness"])
+        ring = (HALO_MODE_NUM[halo_spec["mode"]], r, g, b,
+                halo_spec["speed"], halo_spec["param"], bright)
+
+    m = spec["matrix"]
+    if not zones.get("matrix") or m.get("restore"):
+        mx = (0, 0, 0, 0, 0, 0, 0)
+    elif m.get("follow_color"):
+        # The firmware derives h/s/v from the ring colour and the scale, so a
+        # wireless colour change stays a single frame.
+        mx = (m["effect"], m["speed"], 1, 0, 0, 0, m["brightness"])
+    else:
+        h, s, v = hex_to_hsv(m["color"], m["brightness"])
+        mx = (m["effect"], m["speed"], 0, h, s, v, m["brightness"])
+    return ring + mx
+
+
+def slot_frames(name, old_slot, new_slot):
+    """Config frames for what changed between two slots of one state."""
+    frames = []
+    num = STATE_NUM[name]
+
+    def frame(field, payload):
+        body = bytes([(field << 4) | num]) + bytes(payload)
+        return body + bytes([crc8(body)])
+
+    if old_slot is None or old_slot[1:4] != new_slot[1:4]:
+        frames.append(frame(FIELD_RING_COLOR, new_slot[1:4]))
+    if old_slot is None or (old_slot[0],) + old_slot[4:7] != (new_slot[0],) + new_slot[4:7]:
+        frames.append(frame(FIELD_RING_PARAMS, (new_slot[0],) + new_slot[4:7]))
+    if old_slot is None or old_slot[7:14] != new_slot[7:14]:
+        frames.append(frame(FIELD_MATRIX, new_slot[7:14]))
+    return frames
+
+
+def read_leds_status():
+    """What halo65_leds last wrote about itself and the wireless link."""
+    info = {}
+    try:
+        with open(LEDS_STATUS_PATH, encoding="utf-8") as handle:
+            for line in handle:
+                key, _, value = line.strip().partition("=")
+                info[key] = value
+    except OSError:
+        pass
+    return info
+
+
+class WirelessLink:
+    """The daemon's half of led.state: state number plus queued config frames.
+
+    halo65_leds owns the wire timing; this only decides *what* to assert. The
+    frames line persists until replaced so the sender can finish a transfer
+    across our rewrites of the state number.
+    """
+
+    def __init__(self):
+        self.state_num = 0
+        self.frames_hex = ""
+        self.frames_id = 0
+        # Continue the id sequence across restarts so an old id is never
+        # reused for new content.
+        try:
+            with open(LED_STATE_PATH, encoding="utf-8") as handle:
+                for line in handle:
+                    if line.startswith("frames_id="):
+                        self.frames_id = int(line.split("=", 1)[1])
+        except (OSError, ValueError):
+            pass
+        self._written = None
+
+    def set_state(self, name):
+        self.state_num = STATE_NUM.get(name, 0)
+        self._write()
+
+    def queue_frames(self, frames):
+        if not frames:
+            return
+        self.frames_hex = b"".join(frames).hex().upper()
+        self.frames_id += 1
+        self._write()
+        log(f"wireless sync {self.frames_id}: {len(frames)} frame(s), "
+            f"{len(self.frames_hex) // 2} byte(s)")
+
+    def _write(self):
+        content = f"state={self.state_num}\n"
+        if self.frames_id:
+            content += f"frames={self.frames_hex}\nframes_id={self.frames_id}\n"
+        if content == self._written:
+            return
+        try:
+            tmp = LED_STATE_PATH.with_suffix(".state.tmp")
+            with open(tmp, "w", encoding="utf-8") as handle:
+                handle.write(content)
+            os.replace(tmp, LED_STATE_PATH)
+            self._written = content
+        except OSError as exc:
+            log(f"could not write led.state: {exc}")
+
+
 class Keyboard:
     """Serialises all HID access and remembers the pre-takeover matrix setting."""
 
@@ -360,6 +497,11 @@ class Keyboard:
         self.saved = self._load_saved()
         self.last_halo = None
         self.last_matrix = None
+        # When the last VIA exchange succeeded; 0 until one has. The status
+        # command's reads keep this fresh, so "was USB alive in the last poll
+        # interval" is what transport detection actually asks.
+        self.via_alive_at = 0.0
+        self.via_probe_at = 0.0
 
     def _load_saved(self):
         try:
@@ -381,6 +523,13 @@ class Keyboard:
             log(f"could not persist saved light state: {exc}")
 
     def _run(self, *args, quiet=False):
+        # On Bluetooth the VIA interface is simply absent, and every state
+        # change would otherwise fire doomed subprocesses and log lines. After
+        # a failure, one probe per 10 s keeps watch for the cable coming back.
+        now = time.time()
+        if now - self.via_alive_at > 10 and now - self.via_probe_at < 10:
+            return None
+        self.via_probe_at = now
         try:
             result = subprocess.run(
                 [str(LEDCTL), *[str(a) for a in args]],
@@ -391,10 +540,31 @@ class Keyboard:
                 log(f"ledctl {args[0]} failed: {exc}")
             return None
         if result.returncode != 0:
-            if not quiet:
+            # Exit 2 -- no VIA interface -- is the wireless steady state, not
+            # news; anything else is a real error worth a line.
+            if not quiet and result.returncode != 2:
                 log(f"ledctl {args[0]} rc={result.returncode} {result.stderr.strip()}")
             return None
+        self.via_alive_at = time.time()
         return result.stdout.strip()
+
+    def via_alive(self, within=10.0):
+        return time.time() - self.via_alive_at < within
+
+    # -- state slots ------------------------------------------------------
+
+    def slots_push(self, slots):
+        """Write all six state slots over VIA and commit them to EEPROM.
+
+        This is the wired fast path: the whole configuration lands in well
+        under a second, so a wireless session that follows only ever needs
+        the 2-bit state number.
+        """
+        with self.lock:
+            for name, slot in slots.items():
+                if self._run("slot", STATE_NUM[name], *slot, quiet=True) is None:
+                    return False
+            return self._run("slots-save", quiet=True) is not None
 
     # -- matrix -----------------------------------------------------------
 
@@ -483,8 +653,70 @@ class Keyboard:
                 self.last_halo = None
 
 
+WIRELESS = WirelessLink()
+
+# The keyboard-side slot table the daemon believes is current. "pushed" says
+# whether it reached the keyboard over VIA; when it could not, changes travel
+# as wireless diff frames and a later cable plug-in reconciles everything.
+_CONFIG_SYNC = {"mtime": "unset", "slots": None, "pushed": False, "attempt_at": 0.0}
+
+
+def sync_keyboard_config(keyboard, settings):
+    """Keep the keyboard's per-state slots in step with settings.json.
+
+    Wired, the whole table lands over VIA in one burst. Wireless, only the
+    fields the user just changed go out, as config frames at ~16 bit/s --
+    which is why this never sends on state switches, only on settings edits.
+    """
+    now = time.time()
+    mtime = _SETTINGS_CACHE["mtime"]
+    slots = None
+    if _CONFIG_SYNC["mtime"] != mtime:
+        _CONFIG_SYNC["mtime"] = mtime
+        slots = {name: state_slot(settings, name) for name in ALL_STATES}
+        if slots == _CONFIG_SYNC["slots"]:
+            slots = None                    # rewritten, not changed
+
+    if slots is None:
+        # Nothing new. If a change never made it over VIA, retry once the
+        # cable is back (any successful exchange marks it alive).
+        if (not _CONFIG_SYNC["pushed"] and _CONFIG_SYNC["slots"]
+                and keyboard.via_alive() and now - _CONFIG_SYNC["attempt_at"] > 30):
+            _CONFIG_SYNC["attempt_at"] = now
+            if keyboard.slots_push(_CONFIG_SYNC["slots"]):
+                _CONFIG_SYNC["pushed"] = True
+                log("state slots pushed over VIA (reconciled)")
+        return
+
+    old = _CONFIG_SYNC["slots"]
+    _CONFIG_SYNC["slots"] = slots
+    _CONFIG_SYNC["attempt_at"] = now
+    if keyboard.slots_push(slots):
+        _CONFIG_SYNC["pushed"] = True
+        log("state slots pushed over VIA")
+        return
+    _CONFIG_SYNC["pushed"] = False
+    if old is None:
+        return   # startup baseline: nothing to diff against, nothing to send
+    frames = []
+    for name in ALL_STATES:
+        frames.extend(slot_frames(name, old.get(name), slots[name]))
+    if not frames:
+        return
+    if len(frames) > WIRELESS_FRAMES_MAX:
+        del frames[WIRELESS_FRAMES_MAX:]
+        log("wireless sync truncated: too many fields changed at once; "
+            "plug in USB once to sync everything")
+    WIRELESS.queue_frames(frames)
+
+
 def apply_state(keyboard, settings, name):
     """Push one state's look at both zones."""
+    # The LED-bit sender always learns the state: over USB the firmware
+    # ignores those bits (the VIA writes below are authoritative), and over
+    # Bluetooth they are the only channel there is.
+    WIRELESS.set_state(name)
+
     spec = settings["states"].get(name) or settings["states"]["idle"]
     zones = settings["zones"]
 
@@ -592,6 +824,7 @@ class Aggregator:
     def refresh(self):
         settings = load_settings()
         sync_voice_conf(settings)
+        sync_keyboard_config(self.keyboard, settings)
         with self.lock:
             now = time.time()
             if self.preview_until:
@@ -695,12 +928,45 @@ def handle_command(aggregator, request):
         with aggregator.keyboard.lock:
             current = aggregator.keyboard.matrix_read()
             ring = aggregator.keyboard.halo_read()
+
+        # Transport: a VIA answer in this very call means the cable path is
+        # live; otherwise a fresh heartbeat from the LED-bit sender with a
+        # wireless interface in reach means the 2-bit path carries the state.
+        leds = read_leds_status()
+        try:
+            devices = int(leds.get("devices", "0"))
+            updated_ago = time.time() - int(leds.get("updated", "0"))
+            progress = int(leds.get("sync_progress", "-1"))
+            frames_done = int(leds.get("frames_done", "0"))
+        except ValueError:
+            devices, updated_ago, progress, frames_done = 0, 1e9, -1, 0
+        sender_up = leds.get("sender") == "running" and updated_ago < 15
+        if current is not None or ring is not None:
+            transport = "usb"
+        elif sender_up and devices > 0:
+            transport = "bluetooth"
+        else:
+            transport = "none"
+        syncing = (transport == "bluetooth"
+                   and (leds.get("mode") == "sync"
+                        or frames_done < WIRELESS.frames_id))
+
         return {
             "ok": True, "version": VERSION, "state": state, "sessions": sessions,
             "sessions_by_state": breakdown, "remote_sessions": remote,
             "orca": dict(ORCA_BRIDGE.health) if ORCA_BRIDGE else None,
             "previewing": previewing, "zones": settings["zones"],
             "keyboard": current, "halo": ring, "halo_supported": ring is not None,
+            "transport": transport,
+            "wireless": {
+                "sender": leds.get("sender", "not running"),
+                "input_monitoring": leds.get("input_monitoring", "unknown"),
+                "devices": devices,
+                "transports": leds.get("transports", ""),
+                "syncing": syncing,
+                "sync_progress": progress if syncing else -1,
+                "slots_pushed": _CONFIG_SYNC["pushed"],
+            },
             "voice": dict(settings["voice"], **read_voice_status()),
         }
 

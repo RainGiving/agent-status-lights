@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import ClaudeHalo65Core
+import Combine
 import Foundation
 import SwiftUI
 
@@ -17,12 +18,32 @@ final class AppModel: ObservableObject {
     @Published var scanning = false
 
     private var pollTimer: Timer?
+    private var autosave: AnyCancellable?
 
     var isDirty: Bool { settings != saved }
-    var canSave: Bool { settings.isValid && isDirty }
     var daemonRunning: Bool { status?.ok == true }
     var haloSupported: Bool { status?.haloSupported == true }
     var sessionsByState: [String: Int] { status?.sessionsByState ?? [:] }
+
+    /// "usb" / "bluetooth" / "none", as the daemon judged on its last poll.
+    var transport: String { status?.transport ?? "none" }
+    var isWireless: Bool { transport == "bluetooth" }
+    var isSyncing: Bool { status?.wireless?.syncing == true }
+    var syncProgress: Int? {
+        guard let p = status?.wireless?.syncProgress, p >= 0 else { return nil }
+        return p
+    }
+
+    var transportLine: (ok: Bool, warn: Bool, text: String) {
+        switch transport {
+        case "usb":
+            return (true, false, "有线连接（USB · VIA）：改动即时生效")
+        case "bluetooth":
+            return (true, true, "蓝牙连接（LED 位通道）：状态即时，改配置需数秒同步")
+        default:
+            return (false, false, "没有可达的键盘（USB 和蓝牙都不在）")
+        }
+    }
 
     init() {
         reload()
@@ -31,6 +52,14 @@ final class AppModel: ObservableObject {
         pollTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshStatus() }
         }
+        // Every edit applies itself. A slider dragged across its range publishes
+        // on every frame, so the write is debounced rather than fired per value;
+        // a quarter second is below the threshold where a change feels delayed
+        // and far above the rate at which settings.json would be rewritten.
+        autosave = $settings
+            .dropFirst()
+            .debounce(for: .milliseconds(250), scheduler: RunLoop.main)
+            .sink { [weak self] _ in self?.save() }
     }
 
     // MARK: - settings
@@ -51,9 +80,13 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Writes settings.json and tells the daemon to pick it up. Called by the
+    /// autosave pipeline, and directly by anything that has to act on the
+    /// current values before the debounce would have fired.
     func save() {
+        guard settings != saved else { return }
         guard settings.isValid else {
-            note("配置里有非法值，未保存", isError: true)
+            note("配置里有非法值，这一项没有写入", isError: true)
             return
         }
         do {
@@ -62,15 +95,15 @@ final class AppModel: ObservableObject {
             // AppSettings are mtime-cached in the daemon, so this only makes the
             // pickup immediate rather than on the next event.
             try? DaemonClient.reload()
-            note("已保存并应用")
+            note("已生效")
         } catch {
-            note("保存失败：\(error.localizedDescription)", isError: true)
+            note("写入失败：\(error.localizedDescription)", isError: true)
         }
     }
 
     func restoreDefaults() {
         settings = .defaults
-        note("已恢复默认值，点保存后生效")
+        save()
     }
 
     // MARK: - daemon
@@ -98,9 +131,9 @@ final class AppModel: ObservableObject {
         guard let spec = settings.states[key], spec.isValid else {
             note("这个状态的配置非法，无法预览", isError: true); return
         }
-        if isDirty {
-            note("预览的是已保存的配置。先点「保存并应用」再预览。", isError: true)
-        }
+        // The debounce may not have fired yet, and a preview of anything other
+        // than what is on screen would be a lie.
+        save()
         do {
             try DaemonClient.preview(state: key, seconds: 3)
             note("预览 3 秒：\(AppSettings.displayName(key))")

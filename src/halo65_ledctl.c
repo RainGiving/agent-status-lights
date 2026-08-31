@@ -19,9 +19,12 @@ enum {
 
     VIA_CUSTOM_SET_VALUE = 0x07,
     VIA_CUSTOM_GET_VALUE = 0x08,
+    VIA_CUSTOM_SAVE = 0x09,
     CH_RGB_MATRIX = 0x03,
     CH_HALO = 0x10,        /* vendor channel added by firmware/halo-host-control.patch */
     HALO_ANIMATION = 0x01,
+    HALO_STATE_SLOT = 0x02,
+    HALO_SLOT_BYTES = 14,
     RGB_BRIGHTNESS = 0x01,
     RGB_EFFECT = 0x02,
     RGB_SPEED = 0x03,
@@ -182,7 +185,15 @@ static void usage(void) {
         "      mode: release|solid|pulse|comet|strobe|fill\n"
         "      param: comet tail length in LEDs, or strobe duty cycle percent\n"
         "      needs the halo-host-control firmware patch; stock firmware answers\n"
-        "      \"unsupported\"\n");
+        "      \"unsupported\"\n"
+        "\n"
+        "  halo65_ledctl slot <state 0-5> <14 slot bytes>\n"
+        "  halo65_ledctl slot-get <state 0-5>\n"
+        "  halo65_ledctl slots-save\n"
+        "      per-state looks the firmware renders on its own when the host is\n"
+        "      wireless; slot layout is halo_link_slot_t (ring mode r g b speed\n"
+        "      param bright, matrix effect speed flags h s v scale). Writes land\n"
+        "      in RAM; slots-save commits them to keyboard EEPROM\n");
 }
 
 int main(int argc, char **argv) {
@@ -256,6 +267,26 @@ int main(int argc, char **argv) {
                    mode < sizeof(HALO_MODES) / sizeof(HALO_MODES[0]) ? HALO_MODES[mode] : "?",
                    in.buf[4], in.buf[5], in.buf[6], in.buf[7], in.buf[8], in.buf[9]);
         }
+    } else if (strcmp(op, "slot") == 0 && argc == 3 + HALO_SLOT_BYTES) {
+        uint8_t req[REPORT_SIZE] = {VIA_CUSTOM_SET_VALUE, CH_HALO, HALO_STATE_SLOT};
+        bool parsed = parse_u8(argv[2], &req[3]) && req[3] < 6;
+        for (int i = 0; parsed && i < HALO_SLOT_BYTES; i++) {
+            parsed = parse_u8(argv[3 + i], &req[4 + i]);
+        }
+        if (!parsed) { usage(); rc = 64; }
+        else if (!via_exchange(dev, &in, req)) rc = 5;
+    } else if (strcmp(op, "slot-get") == 0 && argc == 3) {
+        uint8_t req[REPORT_SIZE] = {VIA_CUSTOM_GET_VALUE, CH_HALO, HALO_STATE_SLOT};
+        if (!parse_u8(argv[2], &req[3]) || req[3] >= 6) { usage(); rc = 64; }
+        else if (!via_exchange(dev, &in, req)) rc = 5;
+        else {
+            printf("STATE=%u SLOT=", in.buf[3]);
+            for (int i = 0; i < HALO_SLOT_BYTES; i++) printf("%s%u", i ? "," : "", in.buf[4 + i]);
+            printf("\n");
+        }
+    } else if (strcmp(op, "slots-save") == 0) {
+        uint8_t req[REPORT_SIZE] = {VIA_CUSTOM_SAVE, CH_HALO, HALO_STATE_SLOT};
+        if (!via_exchange(dev, &in, req)) rc = 5;
     } else {
         usage();
         rc = 64;

@@ -9,7 +9,14 @@ any of it.
 ```text
 Product     NuPhy Halo65 V2
 USB VID:PID 0x19f5:0x3315
-Transport   USB cable (a 2.4G dongle or Bluetooth does not expose the VIA interface)
+Transport   USB cable only, and both wireless paths were measured:
+
+            Bluetooth        enumerates as "NuPhy Halo65 V2-1", keyboard
+                             interfaces only, no 0xFF60/0x61. via_scan finds
+                             nothing and halo65_ledctl exits 2.
+            2.4G receiver    "NuPhy Halo65 V2 Dongle" 0x19f5:0x3247 offers two
+                             interfaces, 0x0001/0x06 (keyboard) and 0xFF31/0x74
+                             (QMK console). No VIA channel either.
 ```
 
 Four HID interfaces are present. There is **no** vendor-private interface — this
@@ -159,6 +166,146 @@ command or `0xff`, and the rest exactly. Both `halo65_ledctl` and `via_scan`
 loop, discarding reports that do not match, until theirs arrives or the
 deadline passes. Verified with 18 concurrent readers across both binaries:
 all 18 agreed, and agreed with a single reader.
+
+## The wireless status link (LED-bit channel)
+
+Bluetooth exposes no VIA interface at all, so everything above is
+cable-only. What *does* survive a wireless link, measured end to end:
+
+- The BLE report descriptor offers exactly three host-to-keyboard paths:
+  a 5-bit LED output report on report 1, a 16-bit feature report on
+  report 1, and a 5-bit LED output report on report 2.
+- Only the LED report reaches the firmware. In the serial protocol between
+  the closed-source RF module and the main MCU, the single command carrying
+  host data is `CMD_RF_STS_SYSC`, whose reply byte 6 lands in
+  `dev_info.rf_led` — masked to the low three bits (NumLock, CapsLock,
+  ScrollLock). The feature report has no serial command at all and never
+  arrives.
+- Caps Lock cannot carry data: macOS writes the whole LED byte on every
+  caps toggle, wiping the other two bits until the sender's next refresh.
+- Confirmed live over Bluetooth: LED bits written on the host showed on the
+  keyboard (stock caps indicator), i.e. the path
+  host → BLE → RF module → serial → MCU works.
+
+That leaves **2 usable bits** (NumLock = wire bit 0, ScrollLock = wire
+bit 1), polled by `dev_sts_sync()`. `firmware/halo-host-control.patch` turns
+them into a status channel; `src/halo65_leds.c` is the encoder,
+`halo_link.c` in the patch is the decoder.
+
+### Status symbols
+
+| Wire | Meaning |
+| --- | --- |
+| `00` | idle (also the OS's natural resting value — see the wipe rules) |
+| `01` | running |
+| `10` | permission |
+| `11` | escape; the next symbol is `01` failure, `10` completed, `00` voice |
+
+Direct states are re-asserted by rewriting the same value every 100 ms.
+Escaped states re-assert as a repeating `11`(250 ms)/operand(250 ms) cycle.
+A started pair always completes, so the decoder's outstanding escape can
+never consume a fresh direct symbol as its operand.
+
+The decoder trusts any non-zero symbol immediately (only the sender writes
+those bits non-zero). `00` is ambiguous — sender-idle or OS wipe — so it is
+accepted only after 300 ms of persistence, and ignored outright for 300 ms
+after a caps edge. Idle therefore costs one refresh period extra; the other
+five states do not.
+
+### Adaptive polling
+
+`dev_sts_sync()` runs every 200 ms until the LED byte changes, then every
+50 ms until 2 s pass with no change. One sync costs ~2 ms (1 ms forced delay
+plus up to 1 ms waiting for the ack), so the fast interval spends ~4 % of
+the main loop, and only while symbols are actually moving.
+
+### Config frames
+
+Holding `11` for 1200 ms (decoder threshold 800 ms, measured from *its*
+first sample of the 11, which can lag a slow-poll interval behind the
+write — hence the margin) opens config mode. Every wire transition then
+carries one base-3 digit: `next = (prev + 1 + trit) mod 4`. The stream is
+self-clocking — only edges matter, no shared timing — which is what the
+per-symbol +1 buys: consecutive symbols always differ.
+
+Two trits form one 3-bit group (values 0–7; 8 flags corruption), groups
+form byte-aligned frames:
+
+```
+[ field<<4 | state ] [ payload ] [ crc8 (poly 0x07) ]
+field 0  ring colour    payload r g b
+field 1  ring params    payload mode speed param bright
+field 2  matrix         payload effect speed flags h s v scale
+```
+
+Each frame is sent three times in a row at 100 ms per symbol with a 450 ms
+gap after every copy; the decoder applies a frame only after **two
+consecutive identical CRC-clean copies**, so one corrupted copy (a caps
+press mid-transfer, a missed sample) costs nothing. A transmission ends by
+parking the current status symbol for 900 ms; the decoder re-latches it on
+its 700 ms exit timeout, so the display can never stick.
+
+Net rate: 10 trits/s ≈ 15.8 bit/s. The task-one estimate of 40 bit/s
+assumed one symbol per 50 ms poll, which needs a shared clock the channel
+does not have; self-clocking trits are what actually survive the jitter.
+
+### Timing thresholds
+
+Every decoder threshold sits below the matching sender timing:
+
+| Decoder (halo_link.h) | ms | Sender (halo65_leds.c) | ms |
+| --- | --- | --- | --- |
+| wipe guard / zero confirm | 300 | status rewrite | 100 |
+| config entry (from its sample) | 800 | entry hold | 1200 |
+| frame-gap reset | 300 | inter-copy gap | 450 |
+| config exit (silence) | 700 | park hold | 900 |
+| — | — | escape phase | 250 |
+| — | — | data symbol | 100 |
+
+### Simulated end-to-end latencies
+
+The real encoder (`halo65_leds simulate`) driven against the real decoder
+(`halo_link.c` compiled for the host) through a channel model with 5–35 ms
+BLE delay, adaptive-poll sampling with jitter, and caps wipes. 20 runs with
+random phases:
+
+| State change to | min | median | max (ms) |
+| --- | --- | --- | --- |
+| running / permission | 25 | ~170 | ~580 |
+| failure | 279 | 314 | 342 |
+| completed / voice | 288 | ~360–620 | 840 |
+| idle | 338 | 387 | 563 |
+
+The direct-state maxima come from leaving an escaped state (the started
+pair must finish, up to 500 ms); the escaped-state maximum from a pair that
+straddles a slow-poll gap and is only read on the next cycle. 30 caps-press
+trials against every held state produced zero spurious transitions, and a
+colour-change frame went from queued to applied in **~7.6 s** (entry 1.2 s
++ two 2.8 s copies + debounce). A 10-minute fuzz of random states, wipes
+and syncs settled correctly and never stored a corrupted frame — CRC-8 plus
+the 2-match rule held.
+
+On-hardware Bluetooth numbers are to be measured after the reflash; the
+model's BLE-delay envelope (5–35 ms) is the untested assumption.
+
+### State slots over VIA (value id 0x02)
+
+Wireless carries 2-bit state numbers, so the *looks* live in the keyboard:
+`user_config.halo_slots[6]`, 14 bytes per state (ring mode/r/g/b/speed/
+param/bright + matrix effect/speed/flags/h/s/v/scale), EEPROM-backed with
+their own magic byte. When the cable is in, the daemon writes all six slots
+in one burst — channel `0x10`, value id `0x02`, payload `[state, 14 bytes]`
+— and `0x09` (save) commits them; wireless sessions then only ever send
+state numbers, and config frames update single fields at 15.8 bit/s.
+`matrix flags` bit 0 means the matrix follows the ring colour: the firmware
+recomputes h/s from the ring RGB and scales v, so a wireless colour change
+stays one 5-byte frame. Value id `0x01` (the live animation) is unchanged
+and still never persists.
+
+`EECONFIG_USER_DATA_SIZE` grew 12 → 96 for the slots. The size doubles as
+the datablock's version stamp, so pre-slot EEPROM content reads back
+invalid and re-inits — NuPhy's own fields from their defaults, the slots
+from a compiled copy of the daemon's defaults.
 
 ## Discovering an unknown board
 
