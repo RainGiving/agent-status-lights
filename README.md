@@ -47,13 +47,42 @@
 | 等待权限 | 色带，跟随外圈色 | **整环脉冲** 琥珀 `#FFB000` |
 | 工具失败 | 纯色，跟随外圈色 | **快闪** 红 `#FF2020`，4 秒 |
 | 全部完成 | 纯色，跟随外圈色 | **扫圈填满** 绿 `#00E060`，10 秒 |
+| 语音输入 | 纯色，跟随外圈色 | **纯色不动** 紫 `#A855F7` |
 | 默认 / 空闲 | 恢复你原本的灯效 | 交还固件 |
 
 外圈默认关着，因为它是唯一一件原厂键盘做不到的事 —— 它在 VIA 上根本不存在，必须刷本项目的
 固件补丁。默认打开的话，没刷过固件的键盘装完只会看起来是坏的。
 
-多个会话同时跑时取优先级最高的：**失败 > 等待权限 > 执行中 > 完成 > 默认**。
+多个会话同时跑时取优先级最高的：**语音输入 > 失败 > 等待权限 > 执行中 > 完成 > 默认**。
+语音输入排在最前，因为其余五个说的是后台在做什么，它说的是你此刻正在做什么。
 细节在 [AGENTS](docs/AGENTS.md)。
+
+## 语音输入
+
+按下你自己的语音输入快捷键时，灯变成另一套效果，松开就回到原来的状态。默认关着，
+在设置 App 的「语音输入」页打开。
+
+两种触发方式，可以只用一种，也可以两种任选其一生效：
+
+| 方式 | 需要的权限 | 什么时候亮 |
+| --- | --- | --- |
+| 快捷键 | 输入监控 | 按下配置的组合键时。可以选按住或按一下切换 |
+| 麦克风被占用 | 不需要 | 默认输入设备开始录音时。任何应用录音都算 |
+
+快捷键**按事件看到的样子填**，不是按键帽上印的字。系统设置里把 Control 和 Command
+对调过的话，物理 Command 键发出来的是 `⌃`，微信的「左 Command + 空格」在这里就是
+`⌃Space`。
+
+监听是一个独立的启动项 `halo65_voice`，它只把配置的那一个组合键的按下和松开
+报给守护进程，不认识也不上报别的按键。它要单独授权：
+
+```bash
+/usr/bin/python3 scripts/install.py voice
+```
+
+这条命令会打开「系统设置 → 隐私与安全性 → 输入监控」，把
+`~/Library/Application Support/ClaudeHalo65/halo65_voice` 加进去并打开开关，
+然后它会重启监听进程。**每次重装二进制都要重新授权一次**，因为权限是记在代码签名上的。
 
 ## 打开外圈和远程会话
 
@@ -70,8 +99,9 @@
 
 ## 设置 App
 
-一个独立窗口：每个状态一页，选动画、取色、调亮度速度拖尾，左边有 50 点环形实时预览，
-按固件同样的算法动。还有设备扫描结果、hooks 安装状态、重新连接按钮。
+装在 `~/Applications/HALO.app`。一个独立窗口：每个状态一页，选动画、取色、调亮度速度拖尾，
+左边有 50 点环形实时预览，按固件同样的算法动。语音输入那页还能配触发方式和快捷键。
+还有设备扫描结果、hooks 安装状态、重新连接按钮。
 
 配置在 `~/Library/Application Support/ClaudeHalo65/settings.json`，改完立即生效。
 **动画参数全部走线下发，调参不用重刷固件。**
@@ -84,20 +114,27 @@
 | `matrix.effect` | 1–42，QMK RGB Matrix 效果号，见 [PROTOCOL](docs/PROTOCOL.md) |
 | `matrix.follow_color` | 用同状态外圈的颜色。默认开，这是两圈读起来像一个信号的原因 |
 | `matrix.restore` | 不画东西，把接管前的灯效写回去。只对 `idle` 有意义 |
+| `voice.trigger` | `hotkey` / `microphone` / `both` |
+| `voice.keycode` | 虚拟键码，`49` 是空格 |
+| `voice.modifiers` | `control` / `option` / `shift` / `command`，按事件里的名字写 |
+| `voice.mode` | `hold` 按住，`toggle` 按一下切换 |
+| `voice.tail_seconds` | 触发结束后再保持多久，盖住语音转文字的延迟 |
 
 ## 命令
 
 ```bash
 scan [--deep] [--json]   # 只读：接了什么键盘、有哪些灯光通道
 install / uninstall      # 装或全部移除（恢复灯效，只摘自己的 hook）
-install-app / icon       # 设置 App / 从 assets/icon.png 生成图标
+install-app / icon       # 设置 App / 生成图标
 reconnect [--off]        # 外圈 + Orca 开关
-status                   # 服务 / hooks / 外圈 / codex / orca / 键盘
+voice                    # 语音输入监听：查权限、开授权面板、重启监听
+status                   # 服务 / hooks / 外圈 / codex / orca / 语音 / 键盘
 codex-hooks-install      # 接上 Codex CLI
 send-event Stop          # 不跑真任务测状态机
 ```
 
-日志：`tail -f ~/Library/Application\ Support/ClaudeHalo65/daemon.log`
+日志：`tail -f ~/Library/Application\ Support/ClaudeHalo65/daemon.log`，
+语音监听的日志在同一目录的 `voice.log`。
 
 ## 更多
 

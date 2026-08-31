@@ -22,7 +22,14 @@ BUILD_DIR = REPO / "build"
 APP_SRC = REPO / "macos-app"
 ASSETS = REPO / "assets"
 ICON_SRC = ASSETS / "icon.png"
-APP_NAME = "Claude Halo65.app"
+# The Liquid Glass icon. actool ships with Xcode, not with the command line
+# tools, so icon.png stays as the fallback for a machine that only has the CLT.
+GLASS_ICON_SRC = ASSETS / "HALO.icon"
+GLASS_ICON_NAME = "HALO"
+APP_NAME = "HALO.app"
+# Bundles this project installed under its earlier names. Left behind they would
+# show up twice in Spotlight and in the Dock's recents.
+LEGACY_APP_NAMES = ("Claude Halo65.app", "Claude Halo75.app")
 APP_BUNDLE_ID = "com.claudehalo65.settings"
 USER_APPS = Path.home() / "Applications"
 LAUNCH_AGENT = Path.home() / "Library" / "LaunchAgents" / "com.claudehalo65.daemon.plist"
@@ -31,6 +38,11 @@ CODEX_HOOKS = Path.home() / ".codex" / "hooks.json"
 ORCA_CONFIG = APP_DIR / "orca.json"
 SETTINGS_JSON = APP_DIR / "settings.json"
 LABEL = "com.claudehalo65.daemon"
+# The voice watcher is a second agent on purpose: Input Monitoring is granted to
+# the process that asks for it, and a helper spawned by the Python daemon would
+# put that grant on /usr/bin/python3 instead of on this project's own binary.
+VOICE_LABEL = "com.claudehalo65.voice"
+VOICE_AGENT = Path.home() / "Library" / "LaunchAgents" / "com.claudehalo65.voice.plist"
 
 # The marker that identifies our entries inside a settings.json that other
 # tools also write to, so uninstall removes ours and nothing else.
@@ -76,6 +88,10 @@ def build():
     run(["clang", "-Wall", "-Wextra", "-Werror", "-O2",
          "-o", BUILD_DIR / "via_scan", SRC / "via_scan.c",
          "-framework", "CoreFoundation", "-framework", "IOKit"])
+    run(["clang", "-Wall", "-Wextra", "-Werror", "-O2",
+         "-o", BUILD_DIR / "halo65_voice", SRC / "halo65_voice.c",
+         "-framework", "CoreFoundation", "-framework", "ApplicationServices",
+         "-framework", "CoreAudio", "-framework", "IOKit"])
     # Only the firmware path uses these, but build/ is not checked in, so a
     # fresh clone that skipped them would reach "back up the keymap before
     # DFU" with no way to do it -- the one step that must not be skipped.
@@ -84,7 +100,7 @@ def build():
              "-o", BUILD_DIR / tool, SCRIPTS / f"{tool}.c",
              "-framework", "CoreFoundation", "-framework", "IOKit"])
     print("built:", ", ".join(("halo65_ledctl", "halo65_hook", "via_scan",
-                               "via_backup", "via_restore")))
+                               "halo65_voice", "via_backup", "via_restore")))
 
 
 def hook_command():
@@ -206,8 +222,36 @@ def write_launch_agent():
         plistlib.dump(plist, handle)
 
 
+def write_voice_agent():
+    VOICE_AGENT.parent.mkdir(parents=True, exist_ok=True)
+    plist = {
+        "Label": VOICE_LABEL,
+        "ProgramArguments": [str(APP_DIR / "halo65_voice")],
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        # It exits when Input Monitoring is missing, so that granting the
+        # permission is picked up by the next restart rather than needing one by
+        # hand. The throttle is what keeps that from becoming a spin.
+        "ThrottleInterval": 300,
+        "StandardOutPath": str(APP_DIR / "voice.log"),
+        "StandardErrorPath": str(APP_DIR / "voice.log"),
+    }
+    with open(VOICE_AGENT, "wb") as handle:
+        plistlib.dump(plist, handle)
+
+
 def bootout():
     subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/{LABEL}"],
+                   capture_output=True)
+
+
+def voice_bootout():
+    subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/{VOICE_LABEL}"],
+                   capture_output=True)
+
+
+def voice_bootstrap():
+    subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(VOICE_AGENT)],
                    capture_output=True)
 
 
@@ -223,9 +267,16 @@ def install():
     # finds nothing is the single most likely reason an install "does not work",
     # and it is much cheaper to say so here than to debug it afterwards.
     describe_scan(run_scan())
-    for name in ("halo65_ledctl", "halo65_hook", "via_scan"):
+    for name in ("halo65_ledctl", "halo65_hook", "via_scan", "halo65_voice"):
         shutil.copy2(BUILD_DIR / name, APP_DIR / name)
         os.chmod(APP_DIR / name, 0o755)
+    # TCC records Input Monitoring against the binary's code identity, and an
+    # unsigned binary has none it can hold on to. Ad-hoc signing with a fixed
+    # identifier is what makes the grant survive at all -- it still has to be
+    # given again after a rebuild, because the hash is part of the identity.
+    subprocess.run(["codesign", "--force", "--sign", "-",
+                    "--identifier", "com.claudehalo65.voice", str(APP_DIR / "halo65_voice")],
+                   capture_output=True)
     for module in ("claude_halo65_daemon.py", "orca_bridge.py"):
         shutil.copy2(SRC / module, APP_DIR / module)
     # The menu bar app shells out to this for the hook buttons; only the
@@ -242,6 +293,10 @@ def install():
     write_launch_agent()
     bootstrap()
     print(f"  launch agent -> {LAUNCH_AGENT}")
+    voice_bootout()
+    write_voice_agent()
+    voice_bootstrap()
+    print(f"  voice watcher -> {VOICE_AGENT}")
     time.sleep(1)
     status()
     print("\nRestart Claude Code (fully quit, not just the window) to load the hooks.")
@@ -302,6 +357,40 @@ def make_icns():
     return icns
 
 
+def make_glass_icon():
+    """assets/HALO.icon -> (icns, Assets.car), or None when actool is missing.
+
+    Liquid Glass is rendered by the system from the layers in the .icon bundle,
+    so the app has to ship the compiled asset catalogue rather than a flat
+    picture of it: Assets.car is what carries the glass, and the .icns beside it
+    is the still image every pre-26 surface falls back to.
+    """
+    if not GLASS_ICON_SRC.exists():
+        return None
+    probe = subprocess.run(["xcrun", "--find", "actool"], capture_output=True, text=True)
+    if probe.returncode != 0:
+        print("  ! actool not found (needs full Xcode); falling back to icon.png")
+        return None
+
+    out = BUILD_DIR / "icon"
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
+    result = subprocess.run(
+        ["xcrun", "actool", "--output-format", "human-readable-text", "--errors", "--warnings",
+         "--app-icon", GLASS_ICON_NAME, "--compile", str(out), "--platform", "macosx",
+         "--minimum-deployment-target", "26.0",
+         "--output-partial-info-plist", str(out / "partial.plist"), str(GLASS_ICON_SRC)],
+        capture_output=True, text=True)
+    icns = out / f"{GLASS_ICON_NAME}.icns"
+    car = out / "Assets.car"
+    if result.returncode != 0 or not icns.exists() or not car.exists():
+        print(f"  ! actool failed: {(result.stderr or result.stdout).strip()[:300]}")
+        return None
+    print(f"  icon: {GLASS_ICON_SRC.name} -> {icns.name} + Assets.car (liquid glass)")
+    return icns, car
+
+
 def build_app():
     """Assemble the menu bar app by hand: a SwiftPM executable plus an Info.plist
     with LSUIElement, so it lives in the menu bar and never in the Dock."""
@@ -323,13 +412,23 @@ def build_app():
     shutil.copy2(binary, macos / "ClaudeHalo65")
     os.chmod(macos / "ClaudeHalo65", 0o755)
 
-    icns = make_icns()
-    if icns is not None:
-        shutil.copy2(icns, bundle / "Contents" / "Resources" / "AppIcon.icns")
+    resources = bundle / "Contents" / "Resources"
+    glass = make_glass_icon()
+    icon_name = None
+    if glass is not None:
+        icns, car = glass
+        shutil.copy2(icns, resources / f"{GLASS_ICON_NAME}.icns")
+        shutil.copy2(car, resources / "Assets.car")
+        icon_name = GLASS_ICON_NAME
+    else:
+        icns = make_icns()
+        if icns is not None:
+            shutil.copy2(icns, resources / "AppIcon.icns")
+            icon_name = "AppIcon"
 
     info = {
-        "CFBundleName": "Claude Halo65",
-        "CFBundleDisplayName": "Claude Halo65",
+        "CFBundleName": "HALO",
+        "CFBundleDisplayName": "HALO",
         "CFBundleIdentifier": APP_BUNDLE_ID,
         "CFBundleExecutable": "ClaudeHalo65",
         "CFBundlePackageType": "APPL",
@@ -341,13 +440,14 @@ def build_app():
         "LSUIElement": False,
         "NSHumanReadableCopyright": "MIT",
     }
-    if icns is not None:
+    if icon_name is not None:
         # CFBundleIconFile is what the Finder and the Dock read for a bundle
         # that was not built by Xcode; CFBundleIconName is what newer AppKit
-        # prefers. Both name the same file, and setting only one leaves the
-        # icon missing in whichever surface reads the other.
-        info["CFBundleIconFile"] = "AppIcon"
-        info["CFBundleIconName"] = "AppIcon"
+        # prefers, and on macOS 26 it is also what points at the glass icon
+        # inside Assets.car. Setting only one leaves the icon missing in
+        # whichever surface reads the other.
+        info["CFBundleIconFile"] = icon_name
+        info["CFBundleIconName"] = icon_name
     with open(bundle / "Contents" / "Info.plist", "wb") as handle:
         plistlib.dump(info, handle)
 
@@ -367,6 +467,16 @@ def install_app():
     if target.exists():
         shutil.rmtree(target)
     shutil.copytree(bundle, target)
+    for legacy in LEGACY_APP_NAMES:
+        stale = USER_APPS / legacy
+        if stale.exists():
+            shutil.rmtree(stale)
+            print(f"  removed the old {legacy}")
+    # The icon is cached per bundle path, so a rename shows the previous icon in
+    # the Dock until Launch Services is told the bundle changed.
+    subprocess.run(["/System/Library/Frameworks/CoreServices.framework/Frameworks"
+                    "/LaunchServices.framework/Support/lsregister", "-f", str(target)],
+                   capture_output=True)
     print(f"  installed {target}")
     print(f'\nOpen it with:  open "{target}"')
     return 0
@@ -708,6 +818,8 @@ def status():
         print(f"orca:     last poll {age}, {live.get('remote_sessions', 0)} remote session(s)"
               + (f", error: {health['error']}" if health.get("error") else ""))
 
+    print(f"voice:    {describe_voice(live)}")
+
     ledctl = APP_DIR / "halo65_ledctl"
     if ledctl.exists():
         probe = subprocess.run([str(ledctl), "get"], capture_output=True, text=True)
@@ -724,6 +836,67 @@ def status():
         except json.JSONDecodeError:
             print("saved:    unreadable")
     print(f"settings: {APP_DIR / 'settings.json'}")
+
+
+# Only the keys anyone would sensibly bind a dictation shortcut to. Anything
+# else prints as its raw virtual keycode, which is what the settings app and
+# voice.conf both speak anyway.
+KEY_NAMES = {49: "Space", 36: "Return", 48: "Tab", 53: "Esc", 51: "Delete",
+             96: "F5", 97: "F6", 98: "F7", 99: "F3", 100: "F8", 101: "F9",
+             109: "F10", 103: "F11", 111: "F12", 122: "F1", 120: "F2", 118: "F4"}
+MODIFIER_SYMBOLS = {"control": "⌃", "option": "⌥", "shift": "⇧", "command": "⌘"}
+
+
+def describe_shortcut(voice):
+    keys = "".join(MODIFIER_SYMBOLS.get(m, m) for m in voice.get("modifiers", []))
+    code = voice.get("keycode", 49)
+    return keys + KEY_NAMES.get(code, f"key {code}")
+
+
+def describe_voice(live):
+    """One line: what turns the voice light on, and whether that can work."""
+    if live is None or not isinstance(live.get("voice"), dict):
+        return "daemon not answering"
+    voice = live["voice"]
+    if not voice.get("enabled"):
+        return "off (turn it on in the settings app, 语音输入 page)"
+
+    trigger = voice.get("trigger", "hotkey")
+    parts = []
+    if trigger in ("hotkey", "both"):
+        parts.append(f"{describe_shortcut(voice)} ({voice.get('mode', 'hold')})")
+    if trigger in ("microphone", "both"):
+        parts.append("microphone in use")
+    watcher = voice.get("watcher", "unknown")
+    line = " + ".join(parts) + f", watcher {watcher}"
+    if watcher == "needs input monitoring":
+        line += (f"\n          add {APP_DIR / 'halo65_voice'}\n"
+                 "          in System Settings > Privacy & Security > Input Monitoring, "
+                 "then run 'voice'")
+    return line
+
+
+def voice_setup():
+    """Print what the watcher needs, and open the pane where it is granted."""
+    live = daemon_status()
+    print(f"voice:    {describe_voice(live)}")
+    watcher = (live or {}).get("voice", {}).get("watcher")
+    if watcher == "running":
+        print("  nothing to do")
+        return 0
+    # Asking again is the point of running this by hand.
+    (APP_DIR / "voice.asked").unlink(missing_ok=True)
+    print(f"\n  the binary to allow is:\n    {APP_DIR / 'halo65_voice'}")
+    print("  opening System Settings > Privacy & Security > Input Monitoring")
+    print("  drag that path in with + , or turn its switch on if it is listed already")
+    subprocess.run(["open",
+                    "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"])
+    # The grant only reaches a running process on restart, and launchd is what
+    # restarts it.
+    voice_bootout()
+    voice_bootstrap()
+    print("\n  the watcher was restarted; check 'status' once the switch is on")
+    return 0
 
 
 def test_hid():
@@ -768,9 +941,11 @@ def send_test_event(event, session):
 
 def uninstall():
     bootout()
-    if LAUNCH_AGENT.exists():
-        LAUNCH_AGENT.unlink()
-        print(f"  removed {LAUNCH_AGENT}")
+    voice_bootout()
+    for agent in (LAUNCH_AGENT, VOICE_AGENT):
+        if agent.exists():
+            agent.unlink()
+            print(f"  removed {agent}")
     remove_hooks()
     ledctl = APP_DIR / "halo65_ledctl"
     state = APP_DIR / "state.json"
@@ -787,10 +962,11 @@ def uninstall():
     if APP_DIR.exists():
         shutil.rmtree(APP_DIR)
         print(f"  removed {APP_DIR}")
-    app = USER_APPS / APP_NAME
-    if app.exists():
-        shutil.rmtree(app)
-        print(f"  removed {app}")
+    for name in (APP_NAME,) + LEGACY_APP_NAMES:
+        app = USER_APPS / name
+        if app.exists():
+            shutil.rmtree(app)
+            print(f"  removed {app}")
     print("\nRestart Claude Code to drop the hooks.")
     return 0
 
@@ -800,7 +976,7 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("build", "install", "status", "test-hid", "uninstall",
                  "build-app", "install-app", "hooks-install", "hooks-uninstall",
-                 "icon", "codex-hooks-install", "codex-hooks-uninstall"):
+                 "icon", "codex-hooks-install", "codex-hooks-uninstall", "voice"):
         sub.add_parser(name)
     sc = sub.add_parser("scan")
     sc.add_argument("--deep", action="store_true",
@@ -824,6 +1000,8 @@ def main():
         return 0
     if args.command == "test-hid":
         return test_hid()
+    if args.command == "voice":
+        return voice_setup()
     if args.command == "send-event":
         return send_test_event(args.event, args.session)
     if args.command == "build-app":

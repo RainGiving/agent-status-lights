@@ -34,11 +34,24 @@ SETTINGS_VERSION = 3
 
 # Highest priority first. "idle" is the absence of any tracked session and is a
 # configurable look of its own, not just "hand everything back".
-PRIORITY = ("failure", "permission", "running", "completed")
+#
+# "voice" outranks the agent states: it is the only one the user triggers by
+# hand and it lasts seconds, so covering a running comet while dictating is the
+# behaviour that matches what the user is doing right now.
+PRIORITY = ("voice", "failure", "permission", "running", "completed")
 ALL_STATES = PRIORITY + ("idle",)
 
 HALO_MODES = ("release", "solid", "pulse", "comet", "strobe", "fill")
 MATRIX_EFFECT_MAX = 42
+
+VOICE_CONF_PATH = APP_DIR / "voice.conf"
+VOICE_TRIGGERS = ("hotkey", "microphone", "both")
+VOICE_MODES = ("hold", "toggle")
+# CGEventFlags, which is what the watcher matches on. A Mac with Control and
+# Command swapped in System Settings reports the swapped modifier here, because
+# the remap happens in the HID layer, below the event tap.
+MODIFIER_FLAGS = {"shift": 0x20000, "control": 0x40000,
+                  "option": 0x80000, "command": 0x100000}
 
 # PostToolUse is what clears a lingering "permission" state: PreToolUse fires
 # *before* the permission prompt, so only the post-event proves it was resolved.
@@ -98,10 +111,30 @@ DEFAULT_SETTINGS = {
                        "matrix": matrix("#FF2020", 1, 128, brightness=75)},
         "completed":  {"halo": halo("#00E060", "fill", 215, 0),
                        "matrix": matrix("#00E060", 1, 128)},
+        # Steady purple: every agent state moves, so "not moving" is itself the
+        # distinction, and the colour is nowhere else in the set.
+        "voice":      {"halo": halo("#A855F7", "solid", 128, 0),
+                       "matrix": matrix("#A855F7", 1, 128, brightness=75)},
         # Idle hands both zones back by default, so the lighting the user set
         # with Fn+M and Fn+arrows survives untouched.
         "idle":       {"halo": halo("#000000", "release", 0, 0),
                        "matrix": matrix("#000000", 1, 128, restore=True)},
+    },
+    # What turns the "voice" state on. halo65_voice reads this through
+    # voice.conf, which the daemon rewrites whenever the settings change.
+    #
+    # keycode 49 is Space. The default modifier is Control rather than Command
+    # because the shortcut has to be written the way the event tap sees it, and
+    # on a Mac with the modifiers swapped the physical Command key reports
+    # Control. The settings app records a real key press, so it always writes
+    # what the tap will actually see.
+    "voice": {
+        "enabled": False,
+        "trigger": "hotkey",
+        "keycode": 49,
+        "modifiers": ["control"],
+        "mode": "hold",
+        "tail_seconds": 1.2,
     },
 }
 
@@ -207,6 +240,8 @@ def load_settings():
         _merge_halo(name, entry.get("halo"), settings["states"][name]["halo"])
         _merge_matrix(name, entry.get("matrix"), settings["states"][name]["matrix"])
 
+    _merge_voice(raw.get("voice"), settings["voice"])
+
     _SETTINGS_CACHE["mtime"] = mtime
     _SETTINGS_CACHE["value"] = settings
     return settings
@@ -254,6 +289,67 @@ def _merge_matrix(state, raw, target):
     for flag in ("follow_color", "restore"):
         if isinstance(raw.get(flag), bool):
             target[flag] = raw[flag]
+
+
+def _merge_voice(raw, target):
+    if not isinstance(raw, dict):
+        return
+    if isinstance(raw.get("enabled"), bool):
+        target["enabled"] = raw["enabled"]
+    if raw.get("trigger") in VOICE_TRIGGERS:
+        target["trigger"] = raw["trigger"]
+    if raw.get("mode") in VOICE_MODES:
+        target["mode"] = raw["mode"]
+    # 0-127 is the whole virtual keycode space; anything outside it can never
+    # arrive from a key event.
+    if isinstance(raw.get("keycode"), int) and 0 <= raw["keycode"] <= 127:
+        target["keycode"] = raw["keycode"]
+    mods = raw.get("modifiers")
+    if isinstance(mods, list) and all(m in MODIFIER_FLAGS for m in mods):
+        target["modifiers"] = list(mods)
+    elif mods is not None:
+        log(f"voice.modifiers {mods!r} not a list of {tuple(MODIFIER_FLAGS)}, keeping default")
+    tail = raw.get("tail_seconds")
+    if isinstance(tail, (int, float)) and 0 <= tail <= 10:
+        target["tail_seconds"] = tail
+
+
+def voice_conf_text(settings):
+    voice = settings["voice"]
+    mask = 0
+    for name in voice["modifiers"]:
+        mask |= MODIFIER_FLAGS[name]
+    return (f"enabled={1 if voice['enabled'] else 0}\n"
+            f"trigger={voice['trigger']}\n"
+            f"keycode={voice['keycode']}\n"
+            f"modifiers=0x{mask:x}\n"
+            f"mode={voice['mode']}\n"
+            f"tail_ms={int(voice['tail_seconds'] * 1000)}\n")
+
+
+_VOICE_CONF_CACHE = {"text": None}
+
+
+def sync_voice_conf(settings):
+    """Keep voice.conf in step with settings.json.
+
+    halo65_voice runs under its own launch agent so that Input Monitoring is
+    granted to that binary and not to the Python daemon, which means the two
+    can only talk through a file. It re-reads on mtime, so a shortcut changed
+    in the settings app takes effect without restarting anything.
+    """
+    text = voice_conf_text(settings)
+    if _VOICE_CONF_CACHE["text"] == text:
+        return
+    try:
+        tmp = VOICE_CONF_PATH.with_suffix(".conf.tmp")
+        with open(tmp, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp, VOICE_CONF_PATH)
+        _VOICE_CONF_CACHE["text"] = text
+        log("voice.conf updated")
+    except OSError as exc:
+        log(f"could not write voice.conf: {exc}")
 
 
 class Keyboard:
@@ -432,6 +528,13 @@ class Aggregator:
         self.preview_until = 0.0
 
     def handle(self, event):
+        # halo65_voice speaks the same socket but has no session of its own: it
+        # reports one boolean, and the aggregator treats it as a source that is
+        # either present or gone.
+        if event.get("source") == "voice":
+            self.sync_source("voice", {"voice:input": "voice"} if event.get("active") else {})
+            return
+
         name = event.get("hook_event_name")
         session = event.get("session_id") or "unknown"
 
@@ -488,6 +591,7 @@ class Aggregator:
 
     def refresh(self):
         settings = load_settings()
+        sync_voice_conf(settings)
         with self.lock:
             now = time.time()
             if self.preview_until:
@@ -515,7 +619,7 @@ class Aggregator:
         stale = settings["stale_session_hours"] * 3600
         stale_active = settings["stale_active_minutes"] * 60
         for key, entry in list(self.sessions.items()):
-            limit = stale_active if entry["state"] in ("running", "permission", "failure") else stale
+            limit = stale_active if entry["state"] in ("running", "permission", "failure", "voice") else stale
             if now - entry["updated_at"] > limit:
                 log(f"dropping stale session in {entry['state']} after "
                     f"{int(now - entry['updated_at'])}s")
@@ -553,6 +657,25 @@ def start_orca_bridge(aggregator):
     log("orca bridge started")
 
 
+def read_voice_status():
+    """What halo65_voice last reported about itself.
+
+    The watcher runs as its own launch agent so that Input Monitoring is granted
+    to it and not to this process, so its own account of whether the tap came up
+    is the only accurate one.
+    """
+    result = {"watcher": "not running", "input_monitoring": "unknown"}
+    try:
+        with open(APP_DIR / "voice.status", encoding="utf-8") as handle:
+            for line in handle:
+                key, _, value = line.strip().partition("=")
+                if key in ("watcher", "input_monitoring"):
+                    result[key] = value
+    except OSError:
+        pass
+    return result
+
+
 def handle_command(aggregator, request):
     """Control channel for the settings app. Returns a JSON-serialisable reply."""
     command = request.get("command")
@@ -578,6 +701,7 @@ def handle_command(aggregator, request):
             "orca": dict(ORCA_BRIDGE.health) if ORCA_BRIDGE else None,
             "previewing": previewing, "zones": settings["zones"],
             "keyboard": current, "halo": ring, "halo_supported": ring is not None,
+            "voice": dict(settings["voice"], **read_voice_status()),
         }
 
     if command == "preview":

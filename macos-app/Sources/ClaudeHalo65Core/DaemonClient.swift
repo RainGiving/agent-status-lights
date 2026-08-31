@@ -2,6 +2,18 @@
 import Darwin
 import Foundation
 
+/// What halo65_voice last wrote about itself. It runs as its own launch agent,
+/// so only it can say whether Input Monitoring actually let the tap come up.
+public struct VoiceStatus: Codable, Sendable {
+    public let watcher: String?
+    public let inputMonitoring: String?
+
+    enum CodingKeys: String, CodingKey {
+        case watcher
+        case inputMonitoring = "input_monitoring"
+    }
+}
+
 public struct DaemonStatus: Codable, Sendable {
     public let ok: Bool
     public let version: String?
@@ -10,10 +22,11 @@ public struct DaemonStatus: Codable, Sendable {
     public let sessionsByState: [String: Int]?
     public let previewing: Bool?
     public let haloSupported: Bool?
+    public let voice: VoiceStatus?
     public let error: String?
 
     enum CodingKeys: String, CodingKey {
-        case ok, version, state, sessions, previewing, error
+        case ok, version, state, sessions, previewing, error, voice
         case sessionsByState = "sessions_by_state"
         case haloSupported = "halo_supported"
     }

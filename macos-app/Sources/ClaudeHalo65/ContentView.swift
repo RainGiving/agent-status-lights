@@ -294,6 +294,8 @@ struct StateDetailView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
+                if key == "voice" { triggerBox() }
+
                 HStack(alignment: .top, spacing: 24) {
                     VStack(spacing: 8) {
                         if state.wrappedValue.halo.haloMode == .release {
@@ -321,6 +323,132 @@ struct StateDetailView: View {
             }
             .padding(20)
         }
+    }
+
+    private func modifierBinding(_ name: String) -> Binding<Bool> {
+        Binding(get: { model.settings.voice.modifiers.contains(name) },
+                set: { on in
+                    var mods = Set(model.settings.voice.modifiers)
+                    if on { mods.insert(name) } else { mods.remove(name) }
+                    // Kept in a fixed order so the file does not churn and the
+                    // shortcut always reads ⌃⌥⇧⌘.
+                    model.settings.voice.modifiers =
+                        VoiceConfig.modifierOrder.filter { mods.contains($0) }
+                })
+    }
+
+    /// tail_seconds is a Double in the file; the slider works in milliseconds so
+    /// it lands on round numbers.
+    private var tailMilliseconds: Binding<Int> {
+        Binding(get: { Int((model.settings.voice.tailSeconds * 1000).rounded()) },
+                set: { model.settings.voice.tailSeconds = Double($0) / 1000 })
+    }
+
+    private var watcherLine: (ok: Bool, warn: Bool, text: String) {
+        let voice = model.settings.voice
+        guard voice.enabled else { return (false, true, "未开启") }
+        switch model.status?.voice?.watcher {
+        case "running":
+            return (true, false, "监听进程在运行")
+        case "needs input monitoring":
+            return (false, true, "缺「输入监控」权限，快捷键收不到")
+        case "disabled":
+            return (false, true, "监听进程认为功能是关的，保存一次即可")
+        case .some(let other):
+            return (false, true, "监听进程：\(other)")
+        case nil:
+            return (false, false, "后台服务没在答话")
+        }
+    }
+
+    @ViewBuilder
+    private func triggerBox() -> some View {
+        let voice = $model.settings.voice
+        let status = watcherLine
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle("开启语音输入灯效", isOn: voice.enabled)
+
+                HStack(spacing: 10) {
+                    Text("触发").frame(width: 52, alignment: .leading)
+                    Picker("", selection: voice.trigger) {
+                        Text("快捷键").tag("hotkey")
+                        Text("麦克风被占用").tag("microphone")
+                        Text("两者任一").tag("both")
+                    }
+                    .labelsHidden()
+                    .frame(width: 190)
+                    if model.settings.voice.trigger != "hotkey" {
+                        Text("麦克风这条不需要任何权限，但任何应用录音都会亮。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+
+                if model.settings.voice.trigger != "microphone" {
+                    HStack(spacing: 8) {
+                        Text("快捷键").frame(width: 52, alignment: .leading)
+                        ForEach(VoiceConfig.modifierOrder, id: \.self) { name in
+                            Toggle(VoiceConfig.modifierSymbols[name] ?? name,
+                                   isOn: modifierBinding(name))
+                                .toggleStyle(.button)
+                        }
+                        Picker("", selection: voice.keycode) {
+                            ForEach(VoiceConfig.keys, id: \.code) { key in
+                                Text(key.name).tag(key.code)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 110)
+                        Text(model.settings.voice.shortcutDescription)
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("按事件看到的样子填。系统设置里把 Control 和 Command 对调过的话，"
+                         + "物理 Command 键发出来的是 ⌃，这里就要选 ⌃。")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    HStack(spacing: 10) {
+                        Text("方式").frame(width: 52, alignment: .leading)
+                        Picker("", selection: voice.mode) {
+                            Text("按住").tag("hold")
+                            Text("按一下切换").tag("toggle")
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(width: 210)
+                        Text(model.settings.voice.mode == "hold"
+                             ? "松开就结束" : "再按一下才结束")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+
+                LabeledSlider(label: "余留", value: tailMilliseconds, range: 0...5000,
+                              suffix: " ms")
+                Text("触发结束后再保持这么久，用来盖住语音转文字那一下的延迟。")
+                    .font(.caption).foregroundStyle(.secondary)
+
+                Divider()
+                HStack(spacing: 10) {
+                    StatusDot(ok: status.ok, label: status.text, warn: status.warn)
+                    Spacer()
+                    if model.status?.voice?.watcher == "needs input monitoring" {
+                        Button("打开输入监控设置") {
+                            if let url = URL(string: "x-apple.systempreferences:"
+                                             + "com.apple.preference.security?Privacy_ListenEvent") {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                    }
+                }
+                if model.status?.voice?.watcher == "needs input monitoring" {
+                    Text("把 ~/Library/Application Support/ClaudeHalo65/halo65_voice 加进列表并打开开关，"
+                         + "然后在终端跑一次 install.py voice。")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        } label: { Label("触发方式", systemImage: "mic") }
     }
 
     @ViewBuilder

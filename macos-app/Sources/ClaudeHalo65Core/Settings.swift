@@ -148,6 +148,64 @@ public struct StateSpec: Codable, Equatable, Sendable {
     public var effectiveMatrixColor: String { matrix.followColor ? halo.color : matrix.color }
 }
 
+/// What turns the 语音输入 state on. Mirrors the "voice" block in settings.json,
+/// which the daemon renders into voice.conf for halo65_voice to read.
+public struct VoiceConfig: Codable, Equatable, Sendable {
+    public var enabled: Bool
+    /// hotkey | microphone | both
+    public var trigger: String
+    /// Virtual keycode, the same numbering CGEvent uses. 49 is Space.
+    public var keycode: Int
+    /// control / option / shift / command, named the way the event tap sees
+    /// them. On a Mac with the modifiers swapped in System Settings the
+    /// physical Command key reports control, and this is what must be written.
+    public var modifiers: [String]
+    /// hold | toggle
+    public var mode: String
+    public var tailSeconds: Double
+
+    enum CodingKeys: String, CodingKey {
+        case enabled, trigger, keycode, modifiers, mode
+        case tailSeconds = "tail_seconds"
+    }
+
+    public static let triggers = ["hotkey", "microphone", "both"]
+    public static let modes = ["hold", "toggle"]
+    public static let modifierOrder = ["control", "option", "shift", "command"]
+    public static let modifierSymbols = ["control": "⌃", "option": "⌥",
+                                         "shift": "⇧", "command": "⌘"]
+
+    /// Keys worth binding a dictation shortcut to. Anything else that ends up in
+    /// the file still works; it just prints as its keycode.
+    public static let keys: [(code: Int, name: String)] = [
+        (49, "Space"), (36, "Return"), (48, "Tab"), (53, "Esc"),
+        (122, "F1"), (120, "F2"), (99, "F3"), (118, "F4"), (96, "F5"), (97, "F6"),
+        (98, "F7"), (100, "F8"), (101, "F9"), (109, "F10"), (103, "F11"), (111, "F12"),
+    ]
+
+    public static func keyName(_ code: Int) -> String {
+        keys.first { $0.code == code }?.name ?? "键 \(code)"
+    }
+
+    public var shortcutDescription: String {
+        let symbols = Self.modifierOrder
+            .filter { modifiers.contains($0) }
+            .compactMap { Self.modifierSymbols[$0] }
+            .joined()
+        return symbols + Self.keyName(keycode)
+    }
+
+    public var isValid: Bool {
+        Self.triggers.contains(trigger) && Self.modes.contains(mode)
+            && (0...127).contains(keycode) && (0...10).contains(tailSeconds)
+            && modifiers.allSatisfy { Self.modifierOrder.contains($0) }
+    }
+
+    public static let defaults = VoiceConfig(enabled: false, trigger: "hotkey", keycode: 49,
+                                             modifiers: ["control"], mode: "hold",
+                                             tailSeconds: 1.2)
+}
+
 public struct Zones: Codable, Equatable, Sendable {
     public var halo: Bool
     public var matrix: Bool
@@ -162,17 +220,48 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var staleActiveMinutes: Double
     public var staleSessionHours: Double
     public var states: [String: StateSpec]
+    public var voice: VoiceConfig
 
     enum CodingKeys: String, CodingKey {
-        case version, zones, states
+        case version, zones, states, voice
         case completedHoldSeconds = "completed_hold_seconds"
         case failureHoldSeconds = "failure_hold_seconds"
         case staleActiveMinutes = "stale_active_minutes"
         case staleSessionHours = "stale_session_hours"
     }
 
+    /// Written by hand so that a settings.json from before the 语音输入 state
+    /// still loads: the missing block falls back to the default instead of
+    /// throwing and sending the whole window to defaults.
+    public init(from decoder: Decoder) throws {
+        let box = try decoder.container(keyedBy: CodingKeys.self)
+        version = try box.decode(Int.self, forKey: .version)
+        zones = try box.decode(Zones.self, forKey: .zones)
+        completedHoldSeconds = try box.decode(Double.self, forKey: .completedHoldSeconds)
+        failureHoldSeconds = try box.decode(Double.self, forKey: .failureHoldSeconds)
+        staleActiveMinutes = try box.decode(Double.self, forKey: .staleActiveMinutes)
+        staleSessionHours = try box.decode(Double.self, forKey: .staleSessionHours)
+        states = try box.decode([String: StateSpec].self, forKey: .states)
+        voice = try box.decodeIfPresent(VoiceConfig.self, forKey: .voice) ?? .defaults
+        if states["voice"] == nil { states["voice"] = AppSettings.defaultVoiceState }
+    }
+
+    public init(version: Int, zones: Zones, completedHoldSeconds: Double,
+                failureHoldSeconds: Double, staleActiveMinutes: Double,
+                staleSessionHours: Double, states: [String: StateSpec], voice: VoiceConfig) {
+        self.version = version
+        self.zones = zones
+        self.completedHoldSeconds = completedHoldSeconds
+        self.failureHoldSeconds = failureHoldSeconds
+        self.staleActiveMinutes = staleActiveMinutes
+        self.staleSessionHours = staleSessionHours
+        self.states = states
+        self.voice = voice
+    }
+
     /// idle last: it is the fallback everything returns to, not a status.
-    public static let stateOrder = ["running", "permission", "failure", "completed", "idle"]
+    public static let stateOrder = ["running", "permission", "failure", "completed",
+                                    "voice", "idle"]
 
     public static func displayName(_ key: String) -> String {
         switch key {
@@ -180,6 +269,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case "permission": return "等待权限"
         case "failure":    return "工具失败"
         case "completed":  return "全部完成"
+        case "voice":      return "语音输入"
         case "idle":       return "默认 / 空闲"
         default:           return key
         }
@@ -195,6 +285,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
             return "工具执行失败时闪一下。Bash 退出码非 0 就算，所以它是瞬时提示，保持几秒后自动回到「执行中」。"
         case "completed":
             return "一轮回答结束、等你下一句时显示，保持一段时间后回到默认状态。"
+        case "voice":
+            return "你按下语音输入快捷键、或者麦克风被占用时显示。它压过上面四个状态：那几个是后台在做什么，这个是你此刻正在做什么。"
         case "idle":
             return "没有任何任务时的样子。默认是把两圈都交还固件 —— 也就是恢复你自己用 Fn 键设的灯效。也可以在这里指定一套固定的默认灯效。"
         default:
@@ -229,14 +321,23 @@ public struct AppSettings: Codable, Equatable, Sendable {
                 halo: HaloSpec(color: "#00E060", brightness: 100, mode: "fill", speed: 215, param: 0),
                 matrix: MatrixSpec(color: "#00E060", brightness: 60, effect: 1, speed: 128,
                                    followColor: true, restore: false)),
+            "voice": defaultVoiceState,
             "idle": StateSpec(
                 halo: HaloSpec(color: "#000000", brightness: 100, mode: "release", speed: 0, param: 0),
                 matrix: MatrixSpec(color: "#000000", brightness: 100, effect: 1, speed: 128,
                                    followColor: false, restore: true)),
-        ]
+        ],
+        voice: .defaults
     )
 
-    public var isValid: Bool { states.values.allSatisfy(\.isValid) }
+    /// Steady purple: every agent state moves, so holding still is itself the
+    /// distinction, and the colour is nowhere else in the set.
+    public static let defaultVoiceState = StateSpec(
+        halo: HaloSpec(color: "#A855F7", brightness: 100, mode: "solid", speed: 128, param: 0),
+        matrix: MatrixSpec(color: "#A855F7", brightness: 75, effect: 1, speed: 128,
+                           followColor: true, restore: false))
+
+    public var isValid: Bool { states.values.allSatisfy(\.isValid) && voice.isValid }
 }
 
 public enum SettingsStore {

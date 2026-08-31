@@ -17,6 +17,12 @@
       "kind": "file",
       "state": "active",
       "purpose": "针对 nuphy-src/qmk_firmware 的 nuphy-keyboards 分支、keyboards/nuphy/halo65_v2/ansi 写的外圈补丁，换板子或换分支都要重新生成"
+    },
+    {
+      "path": "assets/HALO.icon",
+      "kind": "directory",
+      "state": "active",
+      "purpose": "设置 App 的液态玻璃图标源：icon.json 加 Assets 里的 SVG 图层，由 actool 编译成 Assets.car 与 icns。actool 只随完整 Xcode 提供，没有它时安装脚本退回 assets/icon.png"
     }
   ]
 }

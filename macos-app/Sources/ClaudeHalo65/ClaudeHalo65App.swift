@@ -8,7 +8,7 @@ struct ClaudeHalo65App: App {
     @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
-        Window("Claude Halo65", id: "main") {
+        Window("HALO", id: "main") {
             RootView()
                 .environmentObject(model)
                 .onAppear { NSApp.activate(ignoringOtherApps: true) }
@@ -16,7 +16,7 @@ struct ClaudeHalo65App: App {
         .defaultSize(width: 880, height: 600)
 
         // Quick access without leaving the window open all day.
-        MenuBarExtra("Claude Halo65", systemImage: "circle.dashed") {
+        MenuBarExtra("HALO", systemImage: "circle.dashed") {
             Button("打开设置…") {
                 openWindow(id: "main")
                 NSApp.activate(ignoringOtherApps: true)
