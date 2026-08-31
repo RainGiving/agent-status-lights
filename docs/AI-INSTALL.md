@@ -23,7 +23,7 @@ NuPhy Halo65 V2，按文档里的适配分支告诉我哪些功能可用。
 
 1. **进 DFU 之前必须先备份 VIA 改键。** 进 bootloader 会清空 EEPROM
    （`bootmagic.c` 里的 `bootmagic_reset_eeprom()`），用户的改键会丢失。没备份就不许刷。
-2. **不许扫 VIA 的命令号。** 通道号是 `0x08` 的参数，扫它安全；命令号不是 ——
+2. **不许扫描 VIA 的命令号。** 通道号是 `0x08` 的参数，扫描通道号是安全的；命令号不是 ——
    `0x0A` 是 `id_eeprom_reset`，`0x0B` 是 `id_bootloader_jump`。本项目的工具只发
    `0x01` / `0x02` / `0x07` / `0x08`，不要自己另写 HID 代码去试别的。
 3. **进 DFU 这一步你做不了，必须停下来。** 它要求人按住 Esc 的同时插上 USB 线，
@@ -233,7 +233,7 @@ cd "$REPO"
 ```
 
 它会：编译、把运行文件放进 `~/Library/Application Support/ClaudeHalo65/`、
-**先用 `/bin/sh` 实跑一次 hook 自测**（这一步会挡住路径含空格导致的静默 exit 127）、
+**先用 `/bin/sh` 实跑一次 hook 自测**（在安装时就暴露路径含空格导致的静默 exit 127）、
 把 7 个 hook 合并进 `~/.claude/settings.json`（带时间戳备份，只动自己的条目）、
 装好 LaunchAgent。
 
