@@ -593,6 +593,10 @@ int main(int argc, char **argv) {
     IOHIDAccessType granted = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent);
     g_manager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
     IOHIDManagerSetDeviceMatching(g_manager, NULL);
+    // Without a run-loop schedule the manager never processes arrival and
+    // removal notifications, and its device set freezes at open time -- a
+    // keyboard switching USB<->Bluetooth after startup would simply vanish.
+    IOHIDManagerScheduleWithRunLoop(g_manager, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
     IOHIDManagerOpen(g_manager, kIOHIDOptionsTypeNone);
 
     if (argc > 1 && !strcmp(argv[1], "check")) {
