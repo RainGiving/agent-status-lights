@@ -533,9 +533,9 @@ class Keyboard:
     def _run(self, *args, quiet=False):
         # On Bluetooth the VIA interface is simply absent, and every state
         # change would otherwise fire doomed subprocesses and log lines. After
-        # a failure, one probe per 10 s keeps watch for the cable coming back.
+        # a failure, one probe per 5 s keeps watch for the cable coming back.
         now = time.time()
-        if now - self.via_alive_at > 10 and now - self.via_probe_at < 10:
+        if now - self.via_alive_at > 10 and now - self.via_probe_at < 5:
             return None
         self.via_probe_at = now
         try:

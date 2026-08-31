@@ -23,6 +23,7 @@
 // behind Input Monitoring, so this runs as its own launch agent: the
 // permission belongs to this binary rather than to the Python daemon that
 // decides what to send.
+#include <ApplicationServices/ApplicationServices.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/hid/IOHIDLib.h>
 #include <IOKit/hid/IOHIDUsageTables.h>
@@ -410,15 +411,27 @@ static IOHIDManagerRef g_manager;
 static char            g_transports[128];
 static int             g_devices;
 
-/* Writes the two data bits to every Halo65 keyboard interface. Caps Lock is
- * never touched: it carries the OS's real lock state, and the decoder uses
- * its edges to recognise OS rewrites. */
+/* Writes both data bits to every Halo65 keyboard interface in ONE output
+ * report per report id. Atomicity is load-bearing: setting the two LED
+ * elements one IOHIDDeviceSetValue at a time becomes two BLE writes, and a
+ * two-bit change (11 -> 00) then shows an intermediate symbol on the wire
+ * for a connection interval -- long enough for the keyboard's 50 ms poll to
+ * read a state that was never sent (measured: an escape/00 re-assert cycle
+ * flashed failure and voice into a held completed). The report carries the
+ * OS's real Caps Lock state, so our writes never fight the caps indicator.
+ *
+ * Layout is the boot-keyboard LED report -- bit = usage - 1 -- which both
+ * the USB interface and the BLE report map use here. If SetReport is ever
+ * refused, the per-element path is kept as a logged fallback. */
 static int write_bits(int num, int scroll, bool verbose) {
     CFSetRef devices = IOHIDManagerCopyDevices(g_manager);
     if (!devices) { g_devices = 0; g_transports[0] = '\0'; return 0; }
     CFIndex count = CFSetGetCount(devices);
     IOHIDDeviceRef *list = calloc((size_t)count ? (size_t)count : 1, sizeof(IOHIDDeviceRef));
     CFSetGetValues(devices, (const void **)list);
+
+    bool caps = (CGEventSourceFlagsState(kCGEventSourceStateCombinedSessionState)
+                 & kCGEventFlagMaskAlphaShift) != 0;
 
     int  touched = 0;
     char transports[128] = "";
@@ -435,18 +448,66 @@ static int write_bits(int num, int scroll, bool verbose) {
             if (verbose) logline("%s (%s): no elements -- input monitoring?", product, transport);
             continue;
         }
-        bool wrote = false;
+        /* One LED output report per report id seen on this interface. */
+        struct { uint32_t rid; uint8_t byte; bool carries_data; } reports[4];
+        int nreports = 0;
+        IOHIDElementRef el_num = NULL, el_scroll = NULL;
         for (CFIndex e = 0; e < CFArrayGetCount(elements); e++) {
             IOHIDElementRef el = (IOHIDElementRef)CFArrayGetValueAtIndex(elements, e);
             if (IOHIDElementGetUsagePage(el) != kHIDPage_LEDs) continue;
             uint32_t usage = IOHIDElementGetUsage(el);
-            int value;
-            if (usage == kHIDUsage_LED_NumLock)         value = num;
-            else if (usage == kHIDUsage_LED_ScrollLock) value = scroll;
-            else continue;
-            IOHIDValueRef v = IOHIDValueCreateWithIntegerValue(kCFAllocatorDefault, el, 0, value);
-            if (IOHIDDeviceSetValue(dev, el, v) == kIOReturnSuccess) wrote = true;
-            CFRelease(v);
+            if (usage < kHIDUsage_LED_NumLock || usage > kHIDUsage_LED_Kana) continue;
+            if (usage == kHIDUsage_LED_NumLock) el_num = el;
+            if (usage == kHIDUsage_LED_ScrollLock) el_scroll = el;
+            uint32_t rid = IOHIDElementGetReportID(el);
+            int slot = -1;
+            for (int r = 0; r < nreports; r++) {
+                if (reports[r].rid == rid) { slot = r; break; }
+            }
+            if (slot < 0 && nreports < 4) {
+                slot = nreports++;
+                reports[slot].rid = rid;
+                reports[slot].byte = 0;
+                reports[slot].carries_data = false;
+            }
+            if (slot < 0) continue;
+            int value = usage == kHIDUsage_LED_NumLock    ? num
+                      : usage == kHIDUsage_LED_CapsLock   ? (caps ? 1 : 0)
+                      : usage == kHIDUsage_LED_ScrollLock ? scroll : 0;
+            reports[slot].byte |= (uint8_t)(value << (usage - kHIDUsage_LED_NumLock));
+            if (usage == kHIDUsage_LED_NumLock || usage == kHIDUsage_LED_ScrollLock) {
+                reports[slot].carries_data = true;
+            }
+        }
+        bool wrote = false;
+        bool need_fallback = false;
+        for (int r = 0; r < nreports; r++) {
+            if (!reports[r].carries_data) continue;
+            uint8_t payload = reports[r].byte;
+            if (IOHIDDeviceSetReport(dev, kIOHIDReportTypeOutput,
+                                     (CFIndex)reports[r].rid, &payload, 1) == kIOReturnSuccess) {
+                wrote = true;
+            } else {
+                need_fallback = true;
+            }
+        }
+        if (need_fallback && !wrote && (el_num || el_scroll)) {
+            /* Last resort: the old element-at-a-time path. Not atomic, but a
+             * flickering channel still beats a dead one. */
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                logline("SetReport refused, falling back to per-element LED writes");
+            }
+            IOHIDElementRef els[2] = {el_num, el_scroll};
+            int vals[2] = {num, scroll};
+            for (int k = 0; k < 2; k++) {
+                if (!els[k]) continue;
+                IOHIDValueRef v = IOHIDValueCreateWithIntegerValue(kCFAllocatorDefault,
+                                                                   els[k], 0, vals[k]);
+                if (IOHIDDeviceSetValue(dev, els[k], v) == kIOReturnSuccess) wrote = true;
+                CFRelease(v);
+            }
         }
         CFRelease(elements);
         if (wrote) {
@@ -455,7 +516,7 @@ static int write_bits(int num, int scroll, bool verbose) {
             strlcat(transports, transport[0] ? transport : "?", sizeof(transports));
         }
         if (verbose) logline("%s (%s): %s", product, transport,
-                             wrote ? "wrote LED bits" : "no LED elements");
+                             wrote ? "wrote LED report" : "no LED elements");
     }
     free(list);
     CFRelease(devices);
