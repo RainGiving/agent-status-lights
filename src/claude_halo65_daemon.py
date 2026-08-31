@@ -506,6 +506,10 @@ class Keyboard:
         # interval" is what transport detection actually asks.
         self.via_alive_at = 0.0
         self.via_probe_at = 0.0
+        # Set when VIA answers after having been unreachable: the cable came
+        # (back), and what the keyboard holds in EEPROM is anyone's guess --
+        # a DFU reflash wipes the state slots without the settings changing.
+        self.via_reconnected = False
 
     def _load_saved(self):
         try:
@@ -549,6 +553,8 @@ class Keyboard:
             if not quiet and result.returncode != 2:
                 log(f"ledctl {args[0]} rc={result.returncode} {result.stderr.strip()}")
             return None
+        if time.time() - self.via_alive_at > 10:
+            self.via_reconnected = True
         self.via_alive_at = time.time()
         return result.stdout.strip()
 
@@ -682,13 +688,17 @@ def sync_keyboard_config(keyboard, settings):
             slots = None                    # rewritten, not changed
 
     if slots is None:
-        # Nothing new. If a change never made it over VIA, retry once the
-        # cable is back (any successful exchange marks it alive).
-        if (not _CONFIG_SYNC["pushed"] and _CONFIG_SYNC["slots"]
-                and keyboard.via_alive() and now - _CONFIG_SYNC["attempt_at"] > 30):
+        # Nothing new in the settings. Still push when a change never made it
+        # over VIA, or when the cable just came back -- a reconnect can mean
+        # a reflash, and DFU wipes the slots without the settings changing.
+        throttle = 5 if keyboard.via_reconnected else 30
+        if ((not _CONFIG_SYNC["pushed"] or keyboard.via_reconnected)
+                and _CONFIG_SYNC["slots"] and keyboard.via_alive()
+                and now - _CONFIG_SYNC["attempt_at"] > throttle):
             _CONFIG_SYNC["attempt_at"] = now
             if keyboard.slots_push(_CONFIG_SYNC["slots"]):
                 _CONFIG_SYNC["pushed"] = True
+                keyboard.via_reconnected = False
                 log("state slots pushed over VIA (reconciled)")
         return
 
@@ -697,6 +707,7 @@ def sync_keyboard_config(keyboard, settings):
     _CONFIG_SYNC["attempt_at"] = now
     if keyboard.slots_push(slots):
         _CONFIG_SYNC["pushed"] = True
+        keyboard.via_reconnected = False
         log("state slots pushed over VIA")
         return
     _CONFIG_SYNC["pushed"] = False
