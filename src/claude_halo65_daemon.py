@@ -849,6 +849,16 @@ class Aggregator:
                 self.current = None       # force a re-apply of the real state
             self._expire(settings)
             target = self.resolve()
+            # "completed" is a terminal flash, not a resting state: the moment
+            # anything else takes the lights, the finished turn is old news and
+            # must not come back when that state ends. Polled sessions are
+            # exempt -- their poller re-asserts them every tick, so dropping
+            # one here would only make the finish look re-trigger on a loop.
+            if target in PRIORITY and target != "completed":
+                for key, entry in list(self.sessions.items()):
+                    if (entry["state"] == "completed"
+                            and not any(key.startswith(p) for p in self.polled_prefixes)):
+                        self.sessions.pop(key)
             if target == "completed":
                 if self.completed_since is None:
                     self.completed_since = time.time()

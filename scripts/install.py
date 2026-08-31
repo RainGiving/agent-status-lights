@@ -708,12 +708,22 @@ def reconnect(off=False):
         return 1
 
     settings = read_json(SETTINGS_JSON, {})
-    settings.setdefault("zones", {})["halo"] = bool(present)
-    settings["zones"].setdefault("matrix", True)
+    already_on = bool((settings.get("zones") or {}).get("halo"))
+    if present:
+        settings.setdefault("zones", {})["halo"] = True
+    elif already_on:
+        # No VIA answer proves nothing over Bluetooth -- the interface simply
+        # is not there. A ring that was verified and enabled earlier keeps
+        # working through the LED-bit channel, so never switch it off here.
+        print("  ring: no VIA answer on USB (Bluetooth does not expose VIA);")
+        print("        keeping the existing on switch unchanged")
+    else:
+        settings.setdefault("zones", {})["halo"] = False
+    settings.setdefault("zones", {}).setdefault("matrix", True)
     write_json(SETTINGS_JSON, settings)
     if present:
         print("  ring: firmware answers on VIA channel 0x10 -- enabled")
-    else:
+    elif not already_on:
         print("  ring: NOT enabled -- the keyboard does not answer on channel 0x10.")
         print("        Either it is on 2.4G/Bluetooth (only USB exposes VIA), VIA or")
         print("        the NuPhy app is holding the raw HID interface, or the firmware")
