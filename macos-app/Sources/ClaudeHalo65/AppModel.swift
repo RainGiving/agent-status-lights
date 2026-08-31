@@ -249,8 +249,21 @@ final class AppModel: ObservableObject {
 
     // MARK: -
 
+    private var messageClearTask: Task<Void, Never>?
+
+    /// Messages show as a transient toast over the detail pane, so each one
+    /// clears itself; errors linger longer than confirmations.
     private func note(_ text: String, isError: Bool = false) {
-        message = text
-        messageIsError = isError
+        messageClearTask?.cancel()
+        withAnimation(.easeInOut(duration: 0.15)) {
+            message = text
+            messageIsError = isError
+        }
+        let holdSeconds: UInt64 = isError ? 8 : 4
+        messageClearTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: holdSeconds * 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.3)) { self?.message = nil }
+        }
     }
 }

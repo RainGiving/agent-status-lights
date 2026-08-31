@@ -261,6 +261,9 @@ struct RootView: View {
                 }
             }
             .navigationSplitViewColumnWidth(min: 175, ideal: 190, max: 230)
+            // No background of its own, so the sidebar's floating material
+            // stays visible behind the two dots.
+            .safeAreaInset(edge: .bottom) { sidebarStatus }
         } detail: {
             Group {
                 switch selection ?? .device {
@@ -271,28 +274,39 @@ struct RootView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .overlay(alignment: .bottom) { messageToast }
         }
         .frame(minWidth: 900, minHeight: 620)
-        .safeAreaInset(edge: .bottom) { footer }
     }
 
-    private var footer: some View {
-        HStack(spacing: 16) {
+    private var sidebarStatus: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Divider()
             StatusDot(ok: model.daemonRunning,
                       label: model.daemonRunning ? "后台服务" : "后台服务未运行")
             let transport = model.transportLine
             StatusDot(ok: transport.ok, label: model.transportBrief, warn: transport.warn)
-            Spacer()
-            if let message = model.message {
-                Text(message)
-                    .font(.callout)
-                    .foregroundStyle(model.messageIsError ? Color.red : Color.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
         }
-        .padding(.horizontal, 16).padding(.vertical, 8)
-        .background(.bar)
+        .font(.callout)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14).padding(.top, 4).padding(.bottom, 10)
+    }
+
+    /// Feedback ("已生效", errors) surfaces as a transient capsule over the
+    /// detail pane; AppModel clears the message a few seconds after noting it.
+    @ViewBuilder
+    private var messageToast: some View {
+        if let message = model.message {
+            Text(message)
+                .font(.callout)
+                .foregroundStyle(model.messageIsError ? Color.red : Color.secondary)
+                .lineLimit(2)
+                .padding(.horizontal, 14).padding(.vertical, 7)
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(Color(nsColor: .separatorColor)))
+                .padding(.bottom, 12)
+                .transition(.opacity)
+        }
     }
 }
 
