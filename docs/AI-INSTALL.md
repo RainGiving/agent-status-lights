@@ -1,17 +1,18 @@
 # AI 安装 runbook
 
-这份文件是写给 **agent** 看的，不是写给人看的。用户会把一行指令粘给 Claude Code 或
+这份文件是写给 **agent** 看的，不是写给人看的。用户会把一段指令粘贴给 Claude Code 或
 Codex，agent 读到这里，然后照着往下执行。
 
 人用的安装说明在 [README](../README.md) 的「安装」一节。
 
 ---
 
-## 给用户：粘这一行
+## 给用户：粘贴这一段
 
 ```text
-帮我装 https://github.com/royzjq/agent-status-lights ：克隆到 ~/Desktop/projects，
-然后严格按照仓库里的 docs/AI-INSTALL.md 执行，遇到需要我动手的步骤停下来问我。
+帮我安装 https://github.com/royzjq/agent-status-lights ：克隆仓库后，严格按照仓库里的
+docs/AI-INSTALL.md 执行，遇到需要我动手的步骤停下来问我。如果我的键盘不是
+NuPhy Halo65 V2，按文档里的适配分支告诉我哪些功能可用。
 ```
 
 ---
@@ -21,29 +22,34 @@ Codex，agent 读到这里，然后照着往下执行。
 这套东西会**改用户的键盘固件**和**用户的 agent 配置文件**。以下几条不是建议：
 
 1. **进 DFU 之前必须先备份 VIA 改键。** 进 bootloader 会清空 EEPROM
-   （`bootmagic.c` 里的 `bootmagic_reset_eeprom()`），用户的改键会没。没备份就不许刷。
+   （`bootmagic.c` 里的 `bootmagic_reset_eeprom()`），用户的改键会丢失。没备份就不许刷。
 2. **不许扫 VIA 的命令号。** 通道号是 `0x08` 的参数，扫它安全；命令号不是 ——
    `0x0A` 是 `id_eeprom_reset`，`0x0B` 是 `id_bootloader_jump`。本项目的工具只发
    `0x01` / `0x02` / `0x07` / `0x08`，不要自己另写 HID 代码去试别的。
 3. **进 DFU 这一步你做不了，必须停下来。** 它要求人按住 Esc 的同时插上 USB 线，
-   没有任何命令能替代。走到那一步就停，把话说清楚，等用户回你「好了」再继续。
+   没有任何命令能替代。走到那一步就停，把要做的事说明清楚，等用户回复「好了」再继续。
 4. **不要手改 `~/.claude/settings.json` 或 `~/.codex/hooks.json`。**
    `install.py` 会做带时间戳的备份、只增删自己打了标记的条目。手改会碰到别人的 hook。
-5. **不要跑 `install.py uninstall`**，除非用户明确要求。它会删掉整个运行目录。
-6. **扫描失败就停，不要猜。** 键盘没插、插的是 2.4G/蓝牙、或者 VIA 开着占了接口 ——
+5. **不要跑 `install.py uninstall`**，除非用户明确要求。它会删除整个运行目录。
+6. **扫描失败就停，不要猜。** 键盘没插、插的是 2.4G/蓝牙、或者 VIA 开着占用了接口 ——
    这三种情况的处理方式完全不同，猜错会让用户在错误的方向上排查很久。
-7. **每一步的输出要念给用户听**，尤其是扫描结果。用户需要知道自己的键盘被认成了什么。
+7. **每一步的输出要复述给用户**，尤其是扫描结果。用户需要知道自己的键盘被认成了什么。
 
-外圈固件那一整段（第 4 步）**只适用于 NuPhy Halo65 V2**，因为补丁是针对那块板子的
-`side.c` 写的。别的 QMK 键盘跳过第 4 步，走内圈就行。
+外圈固件那一整段（第 4 步）**只适用于 NuPhy Halo65 V2**，补丁是针对那块板子的
+`side.c` 写的。蓝牙通道也来自同一份补丁。别的 QMK 键盘跳过第 4 步：内圈（键区背光）
+在 USB 直连下可以直接用，外圈和蓝牙不可用，移植方向见 README 的「适配其他键盘」。
 
 ---
 
 ## 1. 部署
 
+克隆到用户惯用的项目目录；用户没有说明时用 `~/agent-status-lights`。
+下面的命令都通过 `REPO` 引用仓库位置：
+
 ```bash
-git clone https://github.com/royzjq/agent-status-lights ~/Desktop/projects/agent-status-lights
-cd ~/Desktop/projects/agent-status-lights
+REPO=~/agent-status-lights
+git clone https://github.com/royzjq/agent-status-lights "$REPO"
+cd "$REPO"
 ```
 
 检查三个前置条件，缺哪个就告诉用户怎么装，不要静默跳过：
@@ -54,8 +60,8 @@ swift --version          # 构建设置 App 用，跟着 CLT 一起装
 /usr/bin/python3 -V      # macOS 自带，3.9+ 即可；不要换成 brew 的 python
 ```
 
-然后编译 C 部分（五个二进制：`halo65_ledctl`、`halo65_hook`、`via_scan`，
-以及刷固件时才用得上的 `via_backup` / `via_restore`）：
+然后编译 C 部分（`halo65_ledctl`、`halo65_hook`、`via_scan`、`halo65_voice`、
+`halo65_leds`，以及刷固件时才用得上的 `via_backup` / `via_restore`）：
 
 ```bash
 /usr/bin/python3 scripts/install.py build
@@ -69,7 +75,7 @@ swift --version          # 构建设置 App 用，跟着 CLT 一起装
 /usr/bin/python3 scripts/install.py scan
 ```
 
-只读，不写键盘任何一个字节。把完整输出念给用户。需要机器可读的结果就用
+只读，不写键盘任何一个字节。把完整输出复述给用户。需要机器可读的结果就用
 `scan --json`。
 
 ## 3. 按扫描结果分支
@@ -78,7 +84,8 @@ swift --version          # 构建设置 App 用，跟着 CLT 一起装
 
 停下来。按可能性从高到低问用户：
 
-- 键盘是不是用 2.4G 接收器或蓝牙连的？**这两种都不暴露 VIA 接口**，必须插 USB 数据线。
+- 键盘是不是用 2.4G 接收器或蓝牙连的？**这两种都不暴露 VIA 接口**，安装必须插 USB 数据线
+  （装好并刷过固件补丁之后，蓝牙才可用）。
 - 线是不是只能充电的那种？换一根数据线。
 - VIA 网页版 / NuPhy 官方软件 / 别的键盘配置软件是不是开着？它们会独占 raw HID，**退出它们**。
 
@@ -100,11 +107,11 @@ swift --version          # 构建设置 App 用，跟着 CLT 一起装
 - 用户明确说想要外圈那圈 50 颗 Halo 灯
 
 提的时候要把代价说全：需要装 QMK 工具链（源码和子模块约 0.5 GB，ARM toolchain 约 0.9 GB）、
-需要用户物理进 DFU、会清 EEPROM。**默认不要推销它**，问一句就够了。
+需要用户物理进 DFU、会清空 EEPROM。**不要主动劝用户刷固件**，问一句就够了。
 
 **D. 找到设备，`halo_ring` 已经答话**
 
-固件补丁已经在机器上了，第 4 步整个跳过。直接第 5 步，并且在那之后跑 `reconnect`。
+固件补丁已经在键盘上了，第 4 步整个跳过。直接第 5 步，并且在那之后跑 `reconnect`。
 
 ## 4. 外圈固件（可选，只对 Halo65 V2，需要用户动手）
 
@@ -118,7 +125,7 @@ which dfu-util || brew install dfu-util
 
 再看 `~/qmk_nuphy` 在不在。在就跳到 4.2。
 
-不在的话，这四个坑每一个都会让构建失败，照做别绕：
+不在的话，下面四个问题每一个都会让构建失败，照做不要绕开：
 
 ```bash
 git clone --branch nuphy-keyboards https://github.com/nuphy-src/qmk_firmware ~/qmk_nuphy
@@ -126,7 +133,7 @@ cd ~/qmk_nuphy
 git submodule update --init --depth 1 lib/chibios lib/chibios-contrib lib/printf lib/lufa lib/vusb
 ```
 
-1. **Homebrew 的 `arm-none-eabi-gcc` 不带 newlib**，编译一定挂在 `stdint.h`。
+1. **Homebrew 的 `arm-none-eabi-gcc` 不带 newlib**，编译一定失败在 `stdint.h`。
    用 ARM 官方的 toolchain tarball，解压到 `~/qmk_nuphy/toolchain`。Apple Silicon 上
    验证过的一版是 13.3.Rel1：
 
@@ -148,7 +155,7 @@ git submodule update --init --depth 1 lib/chibios lib/chibios-contrib lib/printf
 DFU 会清空 EEPROM，用户的改键就在里面。**先备份，确认文件非空，再往下走。**
 
 ```bash
-cd ~/Desktop/projects/agent-status-lights
+cd "$REPO"
 mkdir -p backups
 STAMP=$(date +%Y%m%d-%H%M%S)
 ./build/via_backup > backups/keymap-$STAMP.txt
@@ -164,7 +171,7 @@ grep -c '^0' backups/keymap-$STAMP.txt      # 应该是几十行，0 行就是�
 
 ```bash
 cd ~/qmk_nuphy
-git apply ~/Desktop/projects/agent-status-lights/firmware/halo-host-control.patch
+git apply "$REPO/firmware/halo-host-control.patch"
 PATH="$HOME/qmk_nuphy/toolchain/bin:$PATH" ~/qmk_nuphy/.venv/bin/qmk compile -kb nuphy/halo65_v2/ansi -km via
 ```
 
@@ -192,7 +199,7 @@ dfu-util -l | grep -i 0483:df11
 已经存在就跳过：
 
 ```bash
-cd ~/Desktop/projects/agent-status-lights
+cd "$REPO"
 [ -f backups/stock-firmware-backup.bin ] || \
   dfu-util -a 0 -d 0483:df11 -s 0x08000000:131072 -U backups/stock-firmware-backup.bin
 ```
@@ -206,7 +213,7 @@ dfu-util -a 0 -d 0483:df11 -s 0x08000000:leave -D ~/qmk_nuphy/nuphy_halo65_v2_an
 键盘会自己重启。等几秒，把改键写回去：
 
 ```bash
-cd ~/Desktop/projects/agent-status-lights
+cd "$REPO"
 ./build/via_restore backups/keymap-$STAMP.txt      # 4.2 记下的那个
 ```
 
@@ -237,13 +244,13 @@ cd ~/Desktop/projects/agent-status-lights
 ```
 
 接的时候要说清：Codex 没有 `PostToolUseFailure` / `StopFailure`，
-**所以 Codex 会话永远不会把灯变红**，其余状态一致。
+**所以 Codex 会话不会把灯变红**，其余状态一致。
 
 ### 5.1 设置 App
 
 ```bash
 /usr/bin/python3 scripts/install.py install-app
-open "$HOME/Applications/Claude Halo65.app"
+open "$HOME/Applications/HALO.app"
 ```
 
 ### 5.2 外圈和远程会话（默认关着）
@@ -256,7 +263,7 @@ open "$HOME/Applications/Claude Halo65.app"
 
 它会打开外圈，并打开 Orca 桥接（远程会话）。**Orca 桥接会去轮询其他机器上终端的
 标题和预览内容**，跑之前跟用户说一声；用户不想要就 `reconnect --off`，
-或者只在设置 App 的「高级」里开外圈。
+或者只在设置 App 的「高级」页开外圈。
 
 ## 6. 验收
 
@@ -264,7 +271,7 @@ open "$HOME/Applications/Claude Halo65.app"
 /usr/bin/python3 scripts/install.py status
 ```
 
-一行行念给用户，重点看：
+逐行复述给用户，重点看：
 
 - `service: running`
 - `hooks: 7/7`
@@ -279,7 +286,7 @@ sleep 12
 /usr/bin/python3 scripts/install.py send-event SessionEnd  # 应该回到默认
 ```
 
-最后**必须**告诉用户这一句，否则他会以为装失败了：
+最后**必须**告诉用户这一句，否则他会以为安装失败了：
 
 > Hook 是在 Claude Code 启动时读的。请用 **Command + Q 完全退出** Claude Code
 > 再重新打开 —— 只关窗口不行。
@@ -298,6 +305,6 @@ tail -50 ~/Library/Application\ Support/ClaudeHalo65/daemon.log
 /usr/bin/python3 scripts/install.py uninstall
 ```
 
-按标记精确摘除 hook（不碰别人的），移除 LaunchAgent 和运行目录，恢复接管前的灯效。
+按标记精确移除 hook（不碰别人的），移除 LaunchAgent 和运行目录，恢复接管前的灯效。
 **固件不会被回滚** —— 那要用 `backups/stock-firmware-backup.bin` 再走一次 DFU，
 需要用户再动一次手。

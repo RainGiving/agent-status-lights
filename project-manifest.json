@@ -4,7 +4,7 @@
       "path": "build",
       "kind": "directory",
       "state": "generated",
-      "purpose": "scripts/install.py 编译出的二进制和 Claude Halo65.app，未被 Git 跟踪，可随时重建"
+      "purpose": "scripts/install.py 编译出的二进制和 HALO.app，未被 Git 跟踪，可随时重建"
     },
     {
       "path": "backups",
@@ -22,7 +22,7 @@
       "path": "assets/HALO.icon",
       "kind": "directory",
       "state": "active",
-      "purpose": "设置 App 的液态玻璃图标源：icon.json 加 Assets 里的 SVG 图层，由 actool 编译成 Assets.car 与 icns。actool 只随完整 Xcode 提供，没有它时安装脚本退回 assets/icon.png"
+      "purpose": "设置 App 的液态玻璃图标源：icon.json 加 Assets/comet.png 彗星图层（assets/render_icon.py 生成），由 actool 编译成 Assets.car 与 icns。actool 只随完整 Xcode 提供，没有它时安装脚本退回 assets/icon.png"
     }
   ]
 }

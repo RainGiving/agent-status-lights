@@ -55,9 +55,28 @@ format, timings and the config-frame encoding are in
 Mode `0` is what keeps the user's own `Fn + M` setting intact: the daemon
 releases the ring whenever it has nothing to report.
 
+## Porting to another keyboard
+
+The patch targets NuPhy's `nuphy-keyboards` branch,
+`keyboards/nuphy/halo65_v2/ansi`. What carries over and what does not:
+
+- `halo_link.[ch]` is pure protocol — no board code. It moves as-is to any
+  keyboard whose wireless module forwards the host's keyboard-LED report to
+  the main MCU.
+- The animation primitives and the `m_side_led_show()` intercept in `side.c`
+  are written for this board's 50-LED ring and its LED index table. A board
+  with a different auxiliary strip needs them rewritten against its own
+  layout.
+- The VIA handling in `ansi.c` (vendor channel `0x10`) and the EEPROM slot
+  storage are small and mostly copy over; pick a vendor channel your firmware
+  does not already answer on.
+- A board without an extra ring needs none of this: the typing-area path is
+  stock VIA and works on factory firmware.
+
 ## Building
 
-See `docs/PROTOCOL.md` for the toolchain notes. In short:
+The toolchain pitfalls are spelled out in `docs/AI-INSTALL.md`, step 4.1.
+In short:
 
 ```bash
 git clone --branch nuphy-keyboards https://github.com/nuphy-src/qmk_firmware ~/qmk_nuphy
