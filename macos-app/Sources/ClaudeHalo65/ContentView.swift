@@ -692,10 +692,16 @@ struct AdvancedView: View {
 
                 GroupBox("时间") {
                     VStack(alignment: .leading, spacing: 12) {
-                        stepper("完成后保持", $model.settings.completedHoldSeconds, 1...120, "秒",
-                                "回答结束后绿色保持多久，然后回到默认状态。")
-                        stepper("失败闪烁保持", $model.settings.failureHoldSeconds, 1...60, "秒",
-                                "红色闪多久后自动回到「执行中」。")
+                        // The two holds mean different things and the labels
+                        // must not pretend otherwise: completed is a real
+                        // countdown to off, failure is a protection window.
+                        stepper("全部完成 · 熄灭倒计时", $model.settings.completedHoldSeconds,
+                                1...30, "秒",
+                                "回答结束后，绿色保持这么久便熄灭、回到默认状态。这是真正的倒计时，到点即灭。")
+                        stepper("工具失败 · 红色保护窗", $model.settings.failureHoldSeconds,
+                                1...30, "秒",
+                                "这段时间内，后续的「执行中」事件不会把红色顶掉，让失败来得及被看见。"
+                                + "到点后红色不会自己熄灭，而是等下一个事件把它切换走。")
                         stepper("失效会话清理", $model.settings.staleActiveMinutes, 5...240, "分钟",
                                 "被强杀的 Claude Code 不会发出 SessionEnd。超过这个时间没有任何事件的活跃会话会被丢弃，"
                                 + "免得灯一直卡在「执行中」。")
