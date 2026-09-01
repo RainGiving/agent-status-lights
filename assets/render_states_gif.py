@@ -4,8 +4,9 @@
 Input: assets/states/{running,permission,failure,completed,voice}.mp4 --
 short clips cut out of the phone's motion photos (the animations really move:
 the comet orbits, the amber ring breathes, the red one strobes).
-Output: docs/states.gif -- a labelled loop through the five states, aligned
-on the keyboard so the cuts do not jitter.
+Output: docs/states/<name>.gif -- one labelled, seamlessly looping GIF per
+state. The window is chosen for high motion AND a small first-to-last frame
+difference, so the loop point does not jump.
 """
 import subprocess
 import tempfile
@@ -15,7 +16,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 ASSETS = Path(__file__).resolve().parent
-OUT = ASSETS.parent / "docs" / "states.gif"
+OUT_DIR = ASSETS.parent / "docs" / "states"
 
 STATES = [
     ("running", "执行中", (0, 168, 255)),
@@ -29,8 +30,7 @@ WIDTH = 840            # README-friendly output width
 ASPECT = 2.35          # fixed crop aspect so every frame lands the same size
 MARGIN = 0.07          # extra room around the keyboard for the glow
 FPS = 10
-SECONDS = 1.6          # of motion shown per state
-FADE_FRAMES = 2        # cross-fade frames between states
+LOOP_FRAMES = range(12, 27)   # allowed loop lengths: 1.2 s to 2.6 s
 
 
 def keyboard_box(im):
@@ -96,53 +96,54 @@ def decode(clip, tmp):
     return [Image.open(p).convert("RGB") for p in sorted(frame_dir.iterdir())]
 
 
-def liveliest_window(frames, count):
-    """Start index of the `count`-frame window with the most motion, so a
-    clip's shaky lead-in and any still tail are skipped automatically."""
-    diffs = []
-    for a, b in zip(frames, frames[1:]):
-        pa = np.asarray(a.resize((160, 90)), dtype=np.int16)
-        pb = np.asarray(b.resize((160, 90)), dtype=np.int16)
-        diffs.append(np.abs(pa - pb).mean())
-    if len(diffs) < count:
-        return 0
-    scores = [sum(diffs[i:i + count]) for i in range(len(diffs) - count + 1)]
-    return int(np.argmax(scores))
+def frame_diff(a, b):
+    pa = np.asarray(a.resize((160, 90)), dtype=np.int16)
+    pb = np.asarray(b.resize((160, 90)), dtype=np.int16)
+    return float(np.abs(pa - pb).mean())
+
+
+def loop_window(frames):
+    """(start, length) balancing two aims: plenty of motion inside the window,
+    and a small difference between the window's last frame and its first, so
+    the GIF's loop point does not visibly jump."""
+    diffs = [frame_diff(a, b) for a, b in zip(frames, frames[1:])]
+    best, best_score = (0, min(len(frames), max(LOOP_FRAMES))), -1e9
+    for length in LOOP_FRAMES:
+        for start in range(0, len(frames) - length):
+            motion = sum(diffs[start:start + length - 1]) / (length - 1)
+            seam = frame_diff(frames[start + length - 1], frames[start])
+            score = motion - 0.9 * seam
+            if score > best_score:
+                best, best_score = (start, length), score
+    return best
+
+
+def encode(frames, out):
+    with tempfile.TemporaryDirectory() as enc_dir:
+        enc = Path(enc_dir)
+        for i, frame in enumerate(frames):
+            frame.save(enc / f"{i:04d}.png")
+        subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-framerate", str(FPS),
+             "-i", str(enc / "%04d.png"), "-filter_complex",
+             "[0:v]split[a][b];[a]palettegen=max_colors=160[p];"
+             "[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle",
+             "-loop", "0", str(out)], check=True)
+    print(f"wrote {out} ({out.stat().st_size / 1e6:.1f} MB, {len(frames)} frames)")
 
 
 def main():
-    per_state = int(FPS * SECONDS)
-    sequences = []
+    OUT_DIR.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
         for name, label, colour in STATES:
             frames = decode(ASSETS / "states" / f"{name}.mp4", tmp)
-            start = liveliest_window(frames, per_state + 1)
-            box = crop_box(frames[start + per_state // 2])
+            start, length = loop_window(frames)
+            box = crop_box(frames[start + length // 2])
             size = (WIDTH, int(WIDTH / ASPECT))
-            picked = [f.crop(box).resize(size, Image.LANCZOS)
-                      for f in frames[start:start + per_state]]
-            sequences.append([labelled(f, label, colour) for f in picked])
-
-        frames = []
-        for i, seq in enumerate(sequences):
-            frames.extend(seq)
-            following = sequences[(i + 1) % len(sequences)][0]
-            for step in range(1, FADE_FRAMES + 1):
-                frames.append(Image.blend(seq[-1], following,
-                                          step / (FADE_FRAMES + 1)))
-
-        out_dir = tmp / "out"
-        out_dir.mkdir()
-        for i, frame in enumerate(frames):
-            frame.save(out_dir / f"{i:04d}.png")
-        subprocess.run(
-            ["ffmpeg", "-v", "error", "-y", "-framerate", str(FPS),
-             "-i", str(out_dir / "%04d.png"), "-filter_complex",
-             "[0:v]split[a][b];[a]palettegen=max_colors=160[p];"
-             "[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle",
-             "-loop", "0", str(OUT)], check=True)
-    print(f"wrote {OUT} ({OUT.stat().st_size / 1e6:.1f} MB, {len(frames)} frames)")
+            picked = [labelled(f.crop(box).resize(size, Image.LANCZOS), label, colour)
+                      for f in frames[start:start + length]]
+            encode(picked, OUT_DIR / f"{name}.gif")
 
 
 if __name__ == "__main__":

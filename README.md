@@ -4,7 +4,19 @@
 变成呼吸的琥珀色，工具出错时闪红色，全部做完时变绿色，你按下语音输入键时变紫色。
 不用盯着终端，瞥一眼键盘就知道进展。
 
-![五种状态的实拍轮播：执行中、等待权限、工具失败、全部完成、语音输入](docs/states.gif)
+<table>
+  <tr>
+    <td><img src="docs/states/running.gif" alt="执行中：青色彗星绕底座转圈"></td>
+    <td><img src="docs/states/permission.gif" alt="等待权限：琥珀色整环脉冲"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/states/failure.gif" alt="工具失败：红色快闪"></td>
+    <td><img src="docs/states/completed.gif" alt="全部完成：绿色扫圈填满"></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><img src="docs/states/voice.gif" alt="语音输入：紫色常亮" width="410"></td>
+  </tr>
+</table>
 
 - **支持的工具**：Claude Code 和 Codex CLI。状态来自它们的 hook 机制 —— 官方提供的
   事件通知接口，安装器会自动配好，不改变两者的任何行为。
