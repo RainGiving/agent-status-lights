@@ -21,7 +21,7 @@ CX = CY = S / 2
 R = 304.0 * 2
 HEAD_DEG = -45.0
 TAIL_SWEEP = 360.0
-W_BAND = 150.0 * 2
+W_HEAD, W_TAIL = 150.0 * 2, 100.0 * 2
 EDGE = 2.4                # soft-edge half-width in supersampled pixels
 
 # The first icon's colour wheel, saturated a touch: hues spaced evenly
@@ -51,11 +51,12 @@ in_tail = delta <= TAIL_SWEEP
 tc = np.clip(t, 0.0, 1.0)
 
 # --- ring band ---------------------------------------------------------------
-# Constant width around the full circle; where t wraps from 1 back to 0 the
-# opacity steps, but that seam sits exactly at the head's angular position
-# and the opaque head disc covers it.
+# The band spans the full circle; where t wraps from 1 back to 0 the width and
+# opacity step, but that seam sits exactly at the head's angular position and
+# the opaque head disc covers it.
+width = W_TAIL + (W_HEAD - W_TAIL) * tc ** 1.2
 dist = np.abs(r - R)
-coverage = np.clip((W_BAND / 2 + EDGE - dist) / (2 * EDGE), 0.0, 1.0)
+coverage = np.clip((width / 2 + EDGE - dist) / (2 * EDGE), 0.0, 1.0)
 fade = 0.72 + 0.28 * tc ** 1.3
 tail_a = np.where(in_tail, coverage * fade, 0.0)
 
