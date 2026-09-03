@@ -21,7 +21,7 @@ CX = CY = S / 2
 R = 304.0 * 2
 HEAD_DEG = -45.0
 TAIL_SWEEP = 360.0
-W_HEAD, W_TAIL = 150.0 * 2, 100.0 * 2
+W_BAND = 150.0 * 2
 EDGE = 2.4                # soft-edge half-width in supersampled pixels
 
 # The first icon's colour wheel, saturated a touch: hues spaced evenly
@@ -51,12 +51,11 @@ in_tail = delta <= TAIL_SWEEP
 tc = np.clip(t, 0.0, 1.0)
 
 # --- ring band ---------------------------------------------------------------
-# The band spans the full circle; where t wraps from 1 back to 0 the width and
-# opacity step, but that seam sits exactly at the head's angular position and
-# the opaque head disc covers it.
-width = W_TAIL + (W_HEAD - W_TAIL) * tc ** 1.2
+# Constant width around the full circle; where t wraps from 1 back to 0 the
+# opacity steps, but that seam sits exactly at the head's angular position
+# and the opaque head disc covers it.
 dist = np.abs(r - R)
-coverage = np.clip((width / 2 + EDGE - dist) / (2 * EDGE), 0.0, 1.0)
+coverage = np.clip((W_BAND / 2 + EDGE - dist) / (2 * EDGE), 0.0, 1.0)
 fade = 0.72 + 0.28 * tc ** 1.3
 tail_a = np.where(in_tail, coverage * fade, 0.0)
 
@@ -88,39 +87,11 @@ for (t0, c0), (t1, c1) in zip(STOPS, STOPS[1:]):
 over(tail_a, [tail_rgb[..., 0], tail_rgb[..., 1], tail_rgb[..., 2]])
 
 
-def colour_at(t):
-    for (t0, c0), (t1, c1) in zip(STOPS, STOPS[1:]):
-        if t <= t1:
-            k = 0 if t1 == t0 else (t - t0) / (t1 - t0)
-            return tuple(a + (b - a) * k for a, b in zip(c0, c1))
-    return STOPS[-1][1]
-
-
-def angle(t):
-    return HEAD_DEG - TAIL_SWEEP * (1 - t)
-
-
-def disc_at(cx, cy, radius, colour, a_max=1.0):
+def disc_at(cx, cy, radius, colour):
     d = np.hypot(xx - cx, yy - cy)
-    a = np.clip((radius + EDGE - d) / (2 * EDGE), 0.0, 1.0) * a_max
+    a = np.clip((radius + EDGE - d) / (2 * EDGE), 0.0, 1.0)
     over(a, [np.full((S, S), c) for c in colour])
 
-
-# --- sparkles in the wake ----------------------------------------------------
-# (position along the tail, radial offset from the ring, radius, opacity).
-# Colours follow the tail at that point, lightened toward white.
-SPARKS = [
-    (0.92,  104.0, 13.0, 0.95),
-    (0.71, -100.0,  9.0, 0.80),
-    (0.46,  110.0,  9.5, 0.80),
-    (0.21,  -98.0,  8.0, 0.70),
-]
-for st, off, rad, a_max in SPARKS:
-    ang = np.radians(angle(st))
-    scx = CX + (R + off * 2) * np.cos(ang)
-    scy = CY + (R + off * 2) * np.sin(ang)
-    c = tuple(v + (255 - v) * 0.25 for v in colour_at(st))
-    disc_at(scx, scy, rad * 2, c, a_max)
 
 # --- head --------------------------------------------------------------------
 hx = CX + R * np.cos(np.radians(HEAD_DEG))
